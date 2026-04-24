@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+
+# Conda
+env/
+.conda/
+
+# VSCode
+.vscode/
+
+# Data (optional)
+data/processed/
+data/mock_logs/
+
+# Vector DB
+vectorstore/*.faiss
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,7 @@
+[
+  "Time: 2026-04-23 16:00:01. Node: joystick. Topic: /joy. Severity: INFO. Message: Joystick connected and publishing messages.",
+  "Time: 2026-04-23 16:00:04. Node: teleop. Topic: /cmd_vel. Severity: ERROR. Message: No velocity command published from teleop node.",
+  "Time: 2026-04-23 16:00:08. Node: qbot_driver. Topic: /qbot_speed_feedback. Severity: WARN. Message: Robot speed feedback remains zero.",
+  "Time: 2026-04-23 16:00:12. Node: lidar. Topic: /scan. Severity: WARN. Message: LaserScan messages are not being received.",
+  "Time: 2026-04-23 16:00:20. Node: battery. Topic: /qbot_battery. Severity: WARN. Message: Battery level is low at 12 percent."
+]
