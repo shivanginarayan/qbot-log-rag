@@ -66,3 +66,11 @@ Output:
 
 \- Deploy on QBot (Jetson Orin Nano)
 
+## Running on QBot
+
+### 1. Start the QBot runtime
+
+From the main ENGR857 workspace:
+
+```bash
+~/ENGR857_Narayan_Shivangi/start_qbot.sh

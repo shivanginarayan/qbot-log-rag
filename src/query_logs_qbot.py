@@ -2,14 +2,24 @@ import json
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 
-# Load model
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
-# Load logs
-with open("vectorstore/log_texts.json", "r") as f:
-    log_texts = json.load(f)
 
-# Precompute embeddings
+def load_logs(file_path):
+    logs = []
+    with open(file_path, "r") as f:
+        for line in f:
+            log = json.loads(line)
+            logs.append(
+                f"Time: {log['timestamp']}. "
+                f"Topic: {log['topic']}. "
+                f"Severity: {log['severity']}. "
+                f"Message: {log['message']}"
+            )
+    return logs
+
+
+log_texts = load_logs("data/processed/converted_logs.jsonl")
 log_embeddings = model.encode(log_texts)
 
 

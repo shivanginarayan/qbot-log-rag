@@ -19,3 +19,30 @@ vectorstore/*.faiss
 # OS
 .DS_Store
 Thumbs.db
+
+# Virtual environments
+shivangi/
+venv/
+.env/
+
+# Runtime data
+data/processed/
+*.jsonl
+
+# Cache
+__pycache__/
+*.pyc
+.cache/
+
+echo "shivangi/" >> .gitignore
+echo "data/processed/" >> .gitignore
+echo "__pycache__/" >> .gitignore
+echo "*.pyc" >> .gitignore
+shivangi/
+data/processed/
+__pycache__/
+*.pyc
+shivangi/
+data/processed/
+__pycache__/
+*.pyc

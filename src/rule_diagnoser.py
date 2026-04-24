@@ -17,6 +17,13 @@ def apply_rules(retrieved_logs):
             "action": "Check QBot driver status, motor enable state, and whether /cmd_vel is reaching the driver."
         })
 
+    if "/qbot_speed_feedback" in logs_text and "'linear_x': 0.0" in logs_text and "'angular_z': 0.0" in logs_text:
+        findings.append({
+            "issue": "Robot is currently not moving",
+            "cause": "The speed feedback topic is active, but both linear and angular speed are zero.",
+            "action": "Check whether /cmd_vel is publishing non-zero commands while moving the joystick."
+        })
+
     if "/scan" in logs_text and ("not being received" in logs_text or "no laserscan" in logs_text):
         findings.append({
             "issue": "LiDAR issue",

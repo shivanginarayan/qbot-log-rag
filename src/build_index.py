@@ -27,7 +27,7 @@ def log_to_text(log):
 
 
 if __name__ == "__main__":
-    path = Path("data/mock_logs/qbot_mock_logs.jsonl")
+    path = Path("data/processed/converted_logs.jsonl")
     logs = load_logs(path)
 
     texts = [log_to_text(log) for log in logs]
