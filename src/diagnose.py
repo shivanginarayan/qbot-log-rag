@@ -1,4 +1,4 @@
-from query_logs import search
+from query_logs_qbot import search
 from rule_diagnoser import apply_rules
 from diagnostic_graph import explain_graph_path
 
