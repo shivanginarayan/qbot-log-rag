@@ -50,10 +50,22 @@ class TopicHealthCollector(Node):
 
     def scan_callback(self, msg):
         self.mark_seen("/scan")
-        valid_ranges = [r for r in msg.ranges if r > 0.0]
+
+        valid_ranges = [
+            r for r in msg.ranges
+            if r > 0.0 and r != float("inf")
+        ]
+
+        min_range = min(valid_ranges) if valid_ranges else None
+
+        obstacle_close = False
+        if min_range is not None and min_range < 0.30:
+            obstacle_close = True
+
         self.latest_values["/scan"] = {
             "num_ranges": len(msg.ranges),
-            "min_range": min(valid_ranges) if valid_ranges else None,
+            "min_range": min_range,
+            "obstacle_close": obstacle_close,
         }
 
     def speed_callback(self, msg):

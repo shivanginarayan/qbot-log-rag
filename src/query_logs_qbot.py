@@ -5,17 +5,21 @@ from sklearn.metrics.pairwise import cosine_similarity
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
 
-def load_logs(file_path):
+def load_logs(file_path, max_logs=200):
     logs = []
+
     with open(file_path, "r") as f:
-        for line in f:
-            log = json.loads(line)
-            logs.append(
-                f"Time: {log['timestamp']}. "
-                f"Topic: {log['topic']}. "
-                f"Severity: {log['severity']}. "
-                f"Message: {log['message']}"
-            )
+        lines = f.readlines()[-max_logs:]
+
+    for line in lines:
+        log = json.loads(line)
+        logs.append(
+            f"Time: {log['timestamp']}. "
+            f"Topic: {log['topic']}. "
+            f"Severity: {log['severity']}. "
+            f"Message: {log['message']}"
+        )
+
     return logs
 
 

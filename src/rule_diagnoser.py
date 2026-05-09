@@ -38,6 +38,13 @@ def apply_rules(retrieved_logs):
             "action": "Charge the QBot or connect it to a stable power source."
         })
 
+    if "/cmd_vel" in logs_text and "'linear_x': 0.0" not in logs_text and "/qbot_speed_feedback" in logs_text and "'linear_x': 0.0" in logs_text and "/scan" in logs_text:
+        findings.append({
+            "issue": "Obstacle blocking movement",
+            "cause": "Movement command is being sent, but the robot is not moving. LiDAR data suggests a nearby obstacle.",
+            "action": "Check surroundings — robot may be blocked by an obstacle."
+        })
+
     if not findings:
         findings.append({
             "issue": "Unknown issue",
