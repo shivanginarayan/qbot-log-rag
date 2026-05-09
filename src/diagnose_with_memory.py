@@ -1,7 +1,8 @@
 import json
 import sqlite3
 from pathlib import Path
-
+from simple_explainer import make_simple_explanation
+from llm_explainer_fast import explain
 from diagnose import diagnose_issue
 
 
@@ -139,8 +140,17 @@ def compare_current_to_past(current_snapshot, past_context):
 def diagnose_with_memory(user_query):
     print("\nCURRENT DIAGNOSIS")
     print("=" * 80)
-    print(diagnose_issue(user_query))
 
+    diagnosis_output = diagnose_issue(user_query)
+
+    print(diagnosis_output)
+
+    print("\nLLM EXPLANATION")
+    print("=" * 80)
+
+    llm_output = explain(diagnosis_output)
+
+    print(llm_output)
     current_snapshot = load_latest_health_snapshot()
 
     print("\nCURRENT TOPIC CONTEXT")
@@ -198,3 +208,6 @@ if __name__ == "__main__":
             break
 
         diagnose_with_memory(query)
+        print("\nSIMPLE HUMAN EXPLANATION")
+        print("=" * 80)
+        # print(make_simple_explanation(current_snapshot, history))

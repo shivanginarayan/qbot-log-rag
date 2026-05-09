@@ -45,6 +45,13 @@ def apply_rules(retrieved_logs):
             "action": "Check surroundings — robot may be blocked by an obstacle."
         })
 
+    if "/qbot_speed_feedback" in logs_text and "not updating" in logs_text:
+        findings.append({
+            "issue": "Speed feedback topic is stale",
+            "cause": "The /qbot_speed_feedback topic is not updating, so the system cannot confirm robot movement.",
+            "action": "Check whether QBot runtime is active and whether /QBotPlatformDriver is publishing /qbot_speed_feedback."
+        })
+
     if not findings:
         findings.append({
             "issue": "Unknown issue",
