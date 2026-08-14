@@ -1,0 +1,10 @@
+{
+  "name": "home",
+  "kind": "navigation",
+  "detail": "Mapping start/home position",
+  "world": {
+    "x": 0.0,
+    "y": 0.0
+  },
+  "status": 4
+}

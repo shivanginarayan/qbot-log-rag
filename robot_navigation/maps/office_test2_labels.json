@@ -1,0 +1,33 @@
+{
+  "map": "office_test2.pgm",
+  "yaml": "office_test2.yaml",
+  "labels": [
+    {
+      "id": "origin",
+      "name": "origin",
+      "kind": "navigation",
+      "detail": "Robot origin",
+      "source": "auto",
+      "x": 651,
+      "y": 638,
+      "world": {
+        "x": 0,
+        "y": 0
+      },
+      "yaw": 0
+    },
+    {
+      "id": "mp1syfu0-br1qc2",
+      "name": "Ahmad Ganji",
+      "kind": "person",
+      "detail": "SEIC 325",
+      "source": "seic_public_directory_with_schedule.xlsx",
+      "x": 1422,
+      "y": 1184,
+      "world": {
+        "x": 7.710000000000001,
+        "y": -5.459999999999999
+      }
+    }
+  ]
+}

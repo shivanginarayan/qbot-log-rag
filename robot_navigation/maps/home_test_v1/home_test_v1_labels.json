@@ -1,0 +1,66 @@
+{
+  "map": "home_test_v1.pgm",
+  "yaml": "home_test_v1.yaml",
+  "labels": [
+    {
+      "id": "home",
+      "name": "home",
+      "kind": "navigation",
+      "detail": "Mapping start/home position",
+      "source": "init_map_labels.py",
+      "world": {
+        "x": 0.0,
+        "y": 0.0
+      },
+      "yaw": 0.0
+    },
+    {
+      "id": "robot_start",
+      "name": "robot_start",
+      "kind": "navigation",
+      "detail": "Robot start pose",
+      "source": "init_map_labels.py",
+      "world": {
+        "x": 0.0,
+        "y": 0.0
+      },
+      "yaw": 0.0
+    },
+    {
+      "id": "start",
+      "name": "start",
+      "kind": "navigation",
+      "detail": "Start pose",
+      "source": "init_map_labels.py",
+      "world": {
+        "x": 0.0,
+        "y": 0.0
+      },
+      "yaw": 0.0
+    },
+    {
+      "id": "original",
+      "name": "original",
+      "kind": "navigation",
+      "detail": "Original pose",
+      "source": "init_map_labels.py",
+      "world": {
+        "x": 0.0,
+        "y": 0.0
+      },
+      "yaw": 0.0
+    },
+    {
+      "id": "origin",
+      "name": "origin",
+      "kind": "navigation",
+      "detail": "Map origin",
+      "source": "init_map_labels.py",
+      "world": {
+        "x": 0.0,
+        "y": 0.0
+      },
+      "yaw": 0.0
+    }
+  ]
+}

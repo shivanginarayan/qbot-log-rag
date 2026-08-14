@@ -1,0 +1,62 @@
+2026-05-05T04:23:59.758981+00:00 314
+2026-05-05T04:27:10.276370+00:00 kubota
+2026-05-05T04:27:24.230104+00:00 yes
+2026-05-05T04:29:35.026069+00:00 Hi, I'm the navigation robot that helps you find a location or room.
+2026-05-05T04:31:41.527101+00:00 Please enter the person or room you are trying to find.
+2026-05-05T04:32:38.715801+00:00 I am the SEIC navigation robot. Please enter the person or room you are trying to find.
+2026-05-05T04:32:50.827084+00:00 I am looking up kubota in the SEIC directory.
+2026-05-05T04:32:50.876371+00:00 Alyssa Kubota is listed at SEIC 326 on floor 3. Would you like me to guide you to SEIC 326? Please type yes or no.
+2026-05-05T04:33:08.377085+00:00 I am looking up yes in the SEIC directory.
+2026-05-05T04:33:08.426617+00:00 Sorry, I couldn't confidently match yes. The closest public directory entries are Energy Systems Lab, CoSE dean's offices, Kwok Siong Teh.
+2026-05-05T04:34:50.683095+00:00 I am the SEIC navigation robot. Please enter the person or room you are trying to find.
+2026-05-05T04:35:01.587162+00:00 I am looking up kubota in the SEIC directory.
+2026-05-05T04:35:01.637180+00:00 Alyssa Kubota is listed at SEIC 326 on floor 3. Would you like me to guide you to SEIC 326? Please type yes or no.
+2026-05-05T04:35:18.688818+00:00 Starting navigation.
+2026-05-05T04:38:41.522066+00:00 I am the SEIC navigation robot. Please enter the person or room you are trying to find.
+2026-05-08T02:12:44.926903+00:00 Hi, I'm the navigation robot that helps you find a location or room.
+2026-05-08T02:20:53.632395+00:00 Hi, I'm the navigation robot that helps you find a location or room.
+2026-05-08T02:26:20.970548+00:00 Hi, I'm the navigation robot that helps you find a location or room.
+2026-05-08T02:26:27.026673+00:00 I am looking up butter in the SEIC directory.
+2026-05-08T02:26:27.106280+00:00 Sorry, I couldn't confidently match butter. The closest public directory entries are Kwok Siong Teh, David Quintero, Anindya Dutta.
+2026-05-08T02:26:50.037594+00:00 I am looking up h in the SEIC directory.
+2026-05-08T02:26:50.475325+00:00 Sorry, I couldn't confidently match h. The closest public directory entries are Kwok Siong Teh, A. S. (Ed) Cheng, Cheng Chen.
+2026-05-08T03:00:05.390929+00:00 Hi, I'm the navigation robot that helps you find a location or room.
+2026-05-08T03:01:39.776626+00:00 Hi, I'm the navigation robot that helps you find a location or room.
+2026-05-08T03:02:39.461312+00:00 I am looking up kubota in the SEIC directory.
+2026-05-08T03:02:39.519248+00:00 Alyssa Kubota is listed at SEIC 326 on floor 3. Would you like me to guide you to SEIC 326? Please type yes or no.
+2026-05-08T03:02:49.702886+00:00 Starting navigation.
+2026-05-08T03:05:36.356893+00:00 Hi, I'm the navigation robot that helps you find a location or room.
+2026-05-08T03:06:16.731494+00:00 I am looking up u in the SEIC directory.
+2026-05-08T03:06:16.796172+00:00 Sorry, I couldn't confidently match u. The closest public directory entries are Hamid Mahmoodi, Zhaoshuo Jiang, David Quintero.
+2026-05-08T03:07:19.279541+00:00 Hello, Hi, I love butter. I'm the nagivation robot that helps you find a location or room.
+2026-05-08T03:07:52.942200+00:00 I am looking up kubot in the SEIC directory.
+2026-05-08T03:07:53.005418+00:00 Alyssa Kubota is listed at SEIC 326 on floor 3. Would you like me to guide you to SEIC 326? Please type yes or no.
+2026-05-08T03:08:07.447488+00:00 Starting navigation.
+2026-05-08T03:08:23.274849+00:00 I am looking up milton in the SEIC directory.
+2026-05-08T03:08:23.331084+00:00 Milton Tinoco is listed at SEIC 313 on floor 3. Would you like me to guide you to SEIC 313? Please type yes or no.
+2026-05-08T03:08:36.845436+00:00 Okay. You can enter another person or room when you are ready.
+2026-05-08T03:08:38.715289+00:00 I am looking up milton in the SEIC directory.
+2026-05-08T03:08:38.769292+00:00 Milton Tinoco is listed at SEIC 313 on floor 3. Would you like me to guide you to SEIC 313? Please type yes or no.
+2026-05-08T03:09:01.393657+00:00 Starting navigation.
+2026-05-08T03:33:41.234173+00:00 Hello, Hi, I love butter. I'm the nagivation robot that helps you find a location or room.
+2026-05-08T03:41:23.069588+00:00 Hello, Hi, I love butter. I'm the nagivation robot that helps you find a location or room.
+2026-05-08T04:02:31.673757+00:00 Hello, Hi, I love butter. I'm the nagivation robot that helps you find a location or room.
+2026-05-08T04:03:54.883037+00:00 Hello there. I can help you find a room or person.
+2026-05-08T04:04:13.835967+00:00 I am looking up fuck in the SEIC directory.
+2026-05-08T04:04:13.926410+00:00 Sorry, I couldn't confidently match fuck. The closest public directory entries are Liam Buckley, Fluids and Process Control Lab, John Kim.
+2026-05-08T04:04:41.051978+00:00 I am looking up gay in the SEIC directory.
+2026-05-08T04:04:41.106601+00:00 Sorry, I couldn't confidently match gay. The closest public directory entries are Ahmad Ganji, Selim Gunay, Garage makerspaces (2 total).
+2026-05-08T04:04:55.117619+00:00 Hello there. I can help you find a room or person.
+2026-05-08T04:05:09.320269+00:00 Hello there. I can help you find a room or person.
+2026-05-08T04:05:50.081851+00:00 Hello, Hi, I love butter. I'm the nagivation robot that helps you find a location or room.
+2026-05-08T04:07:48.620351+00:00 Hello, Hi, I love butter. I'm the nagivation robot that helps you find a location or room.
+2026-05-08T04:12:21.126104+00:00 Hello, Hi, I love butter. I'm the nagivation robot that helps you find a location or room.
+2026-05-08T04:17:38.924292+00:00 Hello, Hi, I love butter. I'm the nagivation robot that helps you find a location or room.
+2026-05-08T04:49:50.525914+00:00 I am the SEIC navigation robot. Please enter the person or room you are trying to find.
+2026-05-08T05:09:38.542085+00:00 I am the SEIC navigation robot. Please enter the person or room you are trying to find.
+2026-05-08T05:09:57.106727+00:00 I am the SEIC navigation robot. Please enter the person or room you are trying to find.
+2026-05-08T05:16:23.046392+00:00 I am the SEIC navigation robot. Please enter the person or room you are trying to find.
+2026-05-08T21:24:50.584469+00:00 Hello, Hi, I love butter. I'm the nagivation robot that helps you find a location or room.
+2026-05-08T21:25:05.910044+00:00 I am looking up kubota in the SEIC directory.
+2026-05-08T21:25:05.963728+00:00 Alyssa Kubota is listed at SEIC 326 on floor 3. Would you like me to guide you to SEIC 326? Please type yes or no.
+2026-05-08T21:25:23.303432+00:00 Starting navigation.

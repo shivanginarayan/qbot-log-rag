@@ -1,0 +1,16 @@
+{
+  "map": "lab_map_v6.pgm",
+  "yaml": "lab_map_v6.yaml",
+  "labels": [
+    {
+      "id": "mowgtkou-x7thzi",
+      "name": "place1",
+      "x": 768,
+      "y": 600,
+      "world": {
+        "x": 2.54,
+        "y": 0.6200000000000001
+      }
+    }
+  ]
+}

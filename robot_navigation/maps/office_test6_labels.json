@@ -1,0 +1,33 @@
+{
+  "map": "office_test6.pgm",
+  "yaml": "office_test6.yaml",
+  "labels": [
+    {
+      "id": "origin",
+      "name": "origin",
+      "kind": "navigation",
+      "detail": "Robot origin",
+      "source": "auto",
+      "x": 602,
+      "y": 611,
+      "world": {
+        "x": 8.881784197001252e-16,
+        "y": 0
+      },
+      "yaw": 0
+    },
+    {
+      "id": "mp28hiva-quitko",
+      "name": "Alyssa Kubota",
+      "kind": "person",
+      "detail": "SEIC 326",
+      "source": "seic_public_directory_with_schedule.xlsx",
+      "x": 991,
+      "y": 632,
+      "world": {
+        "x": 3.8900000000000006,
+        "y": -0.20999999999999996
+      }
+    }
+  ]
+}

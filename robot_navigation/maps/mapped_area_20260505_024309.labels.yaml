@@ -1,0 +1,12 @@
+# Named navigation targets for mapped_area_20260505_024309.yaml.
+map: mapped_area_20260505_024309.yaml
+
+locations:
+  place1:
+    x: 1.142174
+    y: 3.711979
+    yaw: 0.000000
+  place2:
+    x: 1.242174
+    y: -1.588021
+    yaw: 0.000000

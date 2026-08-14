@@ -1,0 +1,12 @@
+# Pip-installable Python dependencies used by this project.
+setuptools
+numpy
+pygame
+opencv-python
+ultralytics
+rapidfuzz
+pytest
+
+# ROS 2 dependencies used by the nodes are typically installed via apt/rosdep,
+# not pip: rclpy, ament_index_python, cv_bridge, sensor_msgs, std_msgs,
+# geometry_msgs, launch, launch_ros, realsense2_camera.

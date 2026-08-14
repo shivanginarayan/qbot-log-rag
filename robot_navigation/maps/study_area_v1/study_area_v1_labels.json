@@ -1,0 +1,66 @@
+{
+  "map": "study_area_v1.pgm",
+  "yaml": "study_area_v1.yaml",
+  "labels": [
+    {
+      "id": "home",
+      "name": "home",
+      "kind": "navigation",
+      "detail": "Saved home position",
+      "source": "auto",
+      "world": {
+        "x": 0.0,
+        "y": 0.0
+      },
+      "yaw": 0.0
+    },
+    {
+      "id": "robot_start",
+      "name": "robot_start",
+      "kind": "navigation",
+      "detail": "Robot start pose",
+      "source": "auto",
+      "world": {
+        "x": 0.0,
+        "y": 0.0
+      },
+      "yaw": 0.0
+    },
+    {
+      "id": "start",
+      "name": "start",
+      "kind": "navigation",
+      "detail": "Start pose",
+      "source": "auto",
+      "world": {
+        "x": 0.0,
+        "y": 0.0
+      },
+      "yaw": 0.0
+    },
+    {
+      "id": "original",
+      "name": "original",
+      "kind": "navigation",
+      "detail": "Original pose",
+      "source": "auto",
+      "world": {
+        "x": 0.0,
+        "y": 0.0
+      },
+      "yaw": 0.0
+    },
+    {
+      "id": "origin",
+      "name": "origin",
+      "kind": "navigation",
+      "detail": "Map origin",
+      "source": "auto",
+      "world": {
+        "x": 0.0,
+        "y": 0.0
+      },
+      "yaw": 0.0
+    }
+  ]
+}

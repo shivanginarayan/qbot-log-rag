@@ -1,13 +1,12 @@
 import json
 import sqlite3
 from pathlib import Path
-from simple_explainer import make_simple_explanation
-from llm_explainer_fast import explain
-from diagnose import diagnose_issue
+from rule_diagnoser import apply_rules
 
 
 DB_PATH = "data/processed/error_memory.db"
 CURRENT_HEALTH_PATH = "data/processed/live_topic_health.jsonl"
+MODE_PATH = "data/processed/runtime_mode.txt"
 
 
 def load_latest_health_snapshot():
@@ -24,24 +23,16 @@ def load_latest_health_snapshot():
     return json.loads(lines[-1])
 
 
-def summarize_context(snapshot):
-    if not snapshot:
-        return "No current topic health snapshot available."
+def load_mode():
+    path = Path(MODE_PATH)
 
-    lines = []
-    lines.append(f"Timestamp: {snapshot.get('timestamp')}")
+    if path.exists():
+        return path.read_text().strip()
 
-    topics = snapshot.get("topics", {})
-
-    for topic, data in topics.items():
-        status = data.get("status")
-        value = data.get("latest_value")
-        lines.append(f"- {topic}: status={status}, value={value}")
-
-    return "\n".join(lines)
+    return "follower"
 
 
-def get_error_history(limit=5):
+def get_error_history(limit=1):
     if not Path(DB_PATH).exists():
         return []
 
@@ -55,149 +46,48 @@ def get_error_history(limit=5):
         LIMIT ?
     """, (limit,))
 
-    errors = cur.fetchall()
-
-    history = []
-
-    for error in errors:
-        error_key, node, severity, message, count, first_seen, last_seen = error
-
-        cur.execute("""
-            SELECT timestamp, context_before
-            FROM error_occurrences
-            WHERE error_key = ?
-            ORDER BY timestamp DESC
-            LIMIT 5
-        """, (error_key,))
-
-        occurrences = cur.fetchall()
-
-        parsed_occurrences = []
-        for timestamp, context_json in occurrences:
-            try:
-                context = json.loads(context_json)
-            except Exception:
-                context = []
-
-            last_context = context[-1] if context else None
-
-            parsed_occurrences.append({
-                "timestamp": timestamp,
-                "context_before": last_context
-            })
-
-        history.append({
-            "error_key": error_key,
-            "node": node,
-            "severity": severity,
-            "message": message,
-            "count": count,
-            "first_seen": first_seen,
-            "last_seen": last_seen,
-            "occurrences": parsed_occurrences
-        })
-
+    rows = cur.fetchall()
     conn.close()
-    return history
 
-
-def compare_current_to_past(current_snapshot, past_context):
-    if not current_snapshot or not past_context:
-        return "Not enough context to compare."
-
-    current_topics = current_snapshot.get("topics", {})
-    past_topics = past_context.get("topics", {})
-
-    matches = []
-    differences = []
-
-    for topic, current_data in current_topics.items():
-        past_data = past_topics.get(topic)
-
-        if past_data is None:
-            continue
-
-        current_value = current_data.get("latest_value")
-        past_value = past_data
-
-        if current_value == past_value:
-            matches.append(topic)
-        else:
-            differences.append(topic)
-
-    if matches and not differences:
-        return "Current topic state looks very similar to the previous occurrence."
-
-    if matches and differences:
-        return (
-            f"Partially similar. Similar topics: {matches}. "
-            f"Different topics: {differences}."
-        )
-
-    return "Current topic state does not look very similar to the stored previous context."
+    return rows
 
 
 def diagnose_with_memory(user_query):
-    print("\nCURRENT DIAGNOSIS")
-    print("=" * 80)
-
-    diagnosis_output = diagnose_issue(user_query)
-
-    print(diagnosis_output)
-
-    print("\nLLM EXPLANATION")
-    print("=" * 80)
-
-    llm_output = explain(diagnosis_output)
-
-    print(llm_output)
     current_snapshot = load_latest_health_snapshot()
+    mode = load_mode()
 
-    print("\nCURRENT TOPIC CONTEXT")
-    print("=" * 80)
-    print(summarize_context(current_snapshot))
+    findings = apply_rules(
+        retrieved_logs=[],
+        current_context=current_snapshot,
+        mode=mode,
+        user_query=user_query
+    )
 
-    history = get_error_history(limit=5)
+    print("\nQBot Answer")
+    print("=" * 50)
 
-    print("\nERROR MEMORY")
-    print("=" * 80)
+    for finding in findings:
+        print(f"Issue: {finding['issue']}")
+        print(f"Reason: {finding['cause']}")
+        print(f"What to do: {finding['action']}")
+        print()
 
-    if not history:
-        print("No previous WARN/ERROR/FATAL events stored yet.")
-        return
+    print("Simple explanation")
+    print("-" * 50)
 
-    for item in history:
-        print("\n" + "-" * 80)
-        print(f"Stored error: [{item['severity']}] {item['node']}: {item['message']}")
-        print(f"Seen count: {item['count']}")
-        print(f"First seen: {item['first_seen']}")
-        print(f"Last seen: {item['last_seen']}")
+    for finding in findings:
+        print(f"Reason: {finding['cause']}")
+        print(f"Next step: {finding['action']}")
+        print()
 
-        if item["count"] == 1:
-            print("Status: This error has only been seen once so far.")
-        else:
-            print("Status: This error has occurred before.")
+    history = get_error_history(limit=1)
 
-        latest_occurrence = item["occurrences"][0] if item["occurrences"] else None
-
-        if latest_occurrence:
-            print(f"Latest occurrence timestamp: {latest_occurrence['timestamp']}")
-
-            comparison = compare_current_to_past(
-                current_snapshot,
-                latest_occurrence["context_before"]
-            )
-
-            print(f"Comparison with current state: {comparison}")
-
-            print("\nWhat happened just before last occurrence:")
-
-            context_before = latest_occurrence["context_before"]
-
-            if context_before:
-                print(summarize_context(context_before))
-            else:
-                print("No context was captured before this occurrence.")
+    if history:
+        latest = history[0]
+        print("Memory")
+        print("-" * 50)
+        print(f"Most recent stored ROS warning/error: [{latest[2]}] {latest[1]}")
+        print(f"Seen count: {latest[4]}")
 
 
 if __name__ == "__main__":
@@ -207,7 +97,7 @@ if __name__ == "__main__":
         if query.lower() == "exit":
             break
 
+        if not query.strip():
+            continue
+
         diagnose_with_memory(query)
-        print("\nSIMPLE HUMAN EXPLANATION")
-        print("=" * 80)
-        # print(make_simple_explanation(current_snapshot, history))

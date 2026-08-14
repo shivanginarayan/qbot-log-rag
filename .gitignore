@@ -46,3 +46,6 @@ shivangi/
 data/processed/
 __pycache__/
 *.pyc
+
+# Generated QBot runtime logs
+runtime_logs/

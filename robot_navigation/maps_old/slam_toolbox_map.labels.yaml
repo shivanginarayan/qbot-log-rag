@@ -1,0 +1,36 @@
+# Named navigation targets for slam_toolbox_map.yaml.
+map: slam_toolbox_map.yaml
+
+locations:
+  1:
+    x: 5.000555
+    y: -0.612870
+    yaw: 0.000000
+  2:
+    x: 4.460555
+    y: -0.552870
+    yaw: 0.000000
+  3:
+    x: 4.580555
+    y: -0.672870
+    yaw: 0.000000
+  4:
+    x: 4.640555
+    y: -0.732870
+    yaw: 0.000000
+  home:
+    x: 0.944805
+    y: 0.039056
+    yaw: -0.134441
+  original:
+    x: 0.944805
+    y: 0.039056
+    yaw: -0.134441
+  robot_start:
+    x: 0.944805
+    y: 0.039056
+    yaw: -0.134441
+  start:
+    x: 0.944805
+    y: 0.039056
+    yaw: -0.134441

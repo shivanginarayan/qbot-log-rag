@@ -1,0 +1,33 @@
+{
+  "map": "office_test5.pgm",
+  "yaml": "office_test5.yaml",
+  "labels": [
+    {
+      "id": "origin",
+      "name": "origin",
+      "kind": "navigation",
+      "detail": "Robot origin",
+      "source": "auto",
+      "x": 627,
+      "y": 733,
+      "world": {
+        "x": 8.881784197001252e-16,
+        "y": 8.881784197001252e-16
+      },
+      "yaw": 0
+    },
+    {
+      "id": "mp1txmk0-9rmaia",
+      "name": "SEIC 327",
+      "kind": "room",
+      "detail": "Conference Room - Conference Room",
+      "source": "seic_public_directory_with_schedule.xlsx",
+      "x": 1988,
+      "y": 723,
+      "world": {
+        "x": 13.61,
+        "y": 0.10000000000000053
+      }
+    }
+  ]
+}

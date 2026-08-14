@@ -1,5 +1,6 @@
 import json
 import time
+import math
 from datetime import datetime
 
 import rclpy
@@ -51,20 +52,80 @@ class TopicHealthCollector(Node):
     def scan_callback(self, msg):
         self.mark_seen("/scan")
 
-        valid_ranges = [
-            r for r in msg.ranges
-            if r > 0.0 and r != float("inf")
-        ]
+        all_valid_points = []
+        front_valid_points = []
 
-        min_range = min(valid_ranges) if valid_ranges else None
+        min_valid_range = 0.15
+        max_valid_range = 5.0
+
+        # Wider front sector for demo:
+        # 0 to 0.80 rad OR 5.48 to 6.28 rad
+        # roughly +/- 45 degrees around front
+        front_left_limit_rad = 0.80
+        front_right_limit_rad = 5.48
+
+        for i, r in enumerate(msg.ranges):
+            if (
+                r >= min_valid_range
+                and r <= max_valid_range
+                and not math.isinf(r)
+                and not math.isnan(r)
+            ):
+                angle_rad = msg.angle_min + i * msg.angle_increment
+                angle_deg = angle_rad * 180.0 / math.pi
+
+                point = (r, i, angle_rad, angle_deg)
+                all_valid_points.append(point)
+
+                if angle_rad <= front_left_limit_rad or angle_rad >= front_right_limit_rad:
+                    front_valid_points.append(point)
+
+        if all_valid_points:
+            global_min_range, global_min_index, global_min_angle_rad, global_min_angle_deg = min(
+                all_valid_points,
+                key=lambda x: x[0]
+            )
+        else:
+            global_min_range = None
+            global_min_index = None
+            global_min_angle_rad = None
+            global_min_angle_deg = None
+
+        if front_valid_points:
+            front_min_range, front_min_index, front_min_angle_rad, front_min_angle_deg = min(
+                front_valid_points,
+                key=lambda x: x[0]
+            )
+        else:
+            front_min_range = None
+            front_min_index = None
+            front_min_angle_rad = None
+            front_min_angle_deg = None
 
         obstacle_close = False
-        if min_range is not None and min_range < 0.30:
+        if front_min_range is not None and front_min_range < 0.30:
             obstacle_close = True
 
         self.latest_values["/scan"] = {
             "num_ranges": len(msg.ranges),
-            "min_range": min_range,
+
+            "min_range": front_min_range,
+            "min_range_index": front_min_index,
+            "min_angle_rad": front_min_angle_rad,
+            "min_angle_deg": front_min_angle_deg,
+
+            "global_min_range": global_min_range,
+            "global_min_range_index": global_min_index,
+            "global_min_angle_rad": global_min_angle_rad,
+            "global_min_angle_deg": global_min_angle_deg,
+
+            "angle_min": msg.angle_min,
+            "angle_max": msg.angle_max,
+            "angle_increment": msg.angle_increment,
+
+            "front_sector_rad": "0 to 0.80 OR 5.48 to 6.28",
+            "front_sector_deg": "+/- 45 degrees around assumed front",
+
             "obstacle_close": obstacle_close,
         }
 

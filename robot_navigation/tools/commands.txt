@@ -1,0 +1,159 @@
+Here’s the updated clean workflow for `qbot_platform` with the fixed label GUI.
+
+**1. Start Mapping**
+
+```bash
+export ROS_DOMAIN_ID=1
+cd /home/nvidia/857_Final_Project_Code
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+ros2 launch qbot_platform qbot_platform_manual_map_launch.py
+```
+
+Drive while mapping:
+
+```text
+Hold LB = enable motion
+RT = forward
+Left stick = turn
+A + drive = reverse
+```
+
+**2. Save The Map**
+
+Open a second terminal:
+
+```bash
+export ROS_DOMAIN_ID=1
+cd /home/nvidia/857_Final_Project_Code
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+mkdir -p maps
+ros2 run nav2_map_server map_saver_cli -t /map -f maps/lab_map_new
+```
+
+This creates:
+
+```text
+maps/lab_map_new.yaml
+maps/lab_map_new.pgm
+```
+
+Then stop mapping with `Ctrl-C`.
+
+**3. Open Map Label GUI**
+
+```bash
+cd /home/nvidia/857_Final_Project_Code
+./tools/map_label_gui.py --host 0.0.0.0 --port 8765
+```
+
+Open in browser:
+
+```text
+http://<qbot-ip>:8765
+```
+
+Or on the Jetson desktop:
+
+```text
+http://127.0.0.1:8765
+```
+
+Choose a room/person from the dropdown, click the map to mark it, then press **Save**.
+
+Labels save here:
+
+```text
+maps/lab_map_new_labels.json
+```
+
+**4. Start Nav2**
+
+```bash
+export ROS_DOMAIN_ID=1
+cd /home/nvidia/857_Final_Project_Code
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+ros2 launch qbot_platform qbot_platform_map_nav_bringup_launch.py map:=/home/nvidia/857_Final_Project_Code/maps/lab_map_new.yaml
+```
+
+Then set the robot’s pose in RViz with **2D Pose Estimate**.
+
+**5. Go To A Label Manually**
+
+Read the label position:
+
+export ROS_DOMAIN_ID=1
+cd /home/nvidia/857_Final_Project_Code
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+./tools/go_to_label.py "Dr. Zhang"
+
+
+```bash
+cat maps/lab_map_new_labels.json
+```
+
+Use the label’s `world.x` and `world.y`.
+
+Example:
+
+```bash
+ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose "{
+  pose: {
+    header: {frame_id: 'map'},
+    pose: {
+      position: {x: 3.8, y: 0.08, z: 0.0},
+      orientation: {z: 0.0, w: 1.0}
+    }
+  }
+}"
+```
+
+**6. Return To Origin/Home**
+
+```bash
+ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose "{
+  pose: {
+    header: {frame_id: 'map'},
+    pose: {
+      position: {x: -0.016, y: -0.011, z: 0.0},
+      orientation: {z: -0.011, w: 1.0}
+    }
+  }
+}"
+
+ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose "{
+  pose: {
+    header: {frame_id: 'map'},
+    pose: {
+      position: {x: 3.74, y: -0.53, z: 0.0},
+      orientation: {z: 0.0, w: 1.0}
+    }
+  }
+}"
+
+```
+
+**Shortcut Roundtrip**
+
+```bash
+ros2 launch qbot_platform qbot_platform_blue_roundtrip_v5_launch.py
+```
+
+or:
+
+```bash
+ros2 launch qbot_platform qbot_platform_black_roundtrip_v5_launch.py
+```
+
+Those use:
+
+```text
+src/qbot_platform/config/trash_targets_v5.yaml
+```

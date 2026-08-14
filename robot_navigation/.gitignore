@@ -1,0 +1,12 @@
+# ROS 2 / colcon generated output
+build/
+install/
+log/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+.venv/
+
+# OS / editor noise
+.DS_Store
