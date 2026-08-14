@@ -49,3 +49,5 @@ __pycache__/
 
 # Generated QBot runtime logs
 runtime_logs/
+
+robot_navigation/runtime_logs/
