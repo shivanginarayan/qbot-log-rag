@@ -1,0 +1,5 @@
+# Core QBot log-storage layer
+#
+# Current storage implementation uses Python standard-library modules only.
+# ROS2 Python packages such as rclpy are provided by the system ROS2 Humble
+# installation and are intentionally NOT installed from pip.

@@ -51,3 +51,5 @@ __pycache__/
 runtime_logs/
 
 robot_navigation/runtime_logs/
+.venv/
+test_robot.db
