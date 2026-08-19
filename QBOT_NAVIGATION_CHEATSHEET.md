@@ -1,0 +1,360 @@
+# QBot Navigation Cheat Sheet
+
+Commands below assume the repository is located at `~/qbot-log-rag` and ROS
+uses domain ID `63`.
+
+## Convenience Scripts
+
+Rebuild after changing package source, configuration, or launch files:
+
+```bash
+./rebuild_qbot_navigation.sh
+```
+
+Prepare the terminal that will run navigation. Environment setup scripts must
+be **sourced** so their exported variables remain in the current terminal:
+
+```bash
+source ./setup_qbot_navigation_terminal.sh
+./run_qbot_navigation.sh
+```
+
+Prepare any additional ROS command/diagnostic terminal:
+
+```bash
+source ./setup_qbot_terminal.sh
+```
+
+Start the browser map labeler in its own terminal:
+
+```bash
+./run_qbot_map_labeler.sh
+```
+
+These scripts use `ROS_DOMAIN_ID=63`.
+
+## 1. Build After Changing Source, Launch, or Configuration Files
+
+```bash
+cd ~/qbot-log-rag/robot_navigation
+source /opt/ros/humble/setup.bash
+source "$HOME/ros2/install/setup.bash"
+colcon build --packages-select qbot_platform
+source install/setup.bash
+```
+
+Rebuild after changing anything under `robot_navigation/src/qbot_platform`,
+including `qbot_platform_slam_and_nav.yaml`.
+
+## 2. Select the Map and Labels
+
+Check these lines in `run_qbot_navigation.sh` before launching:
+
+```bash
+MAP_DIR="$NAV_DIR/maps"
+MAP="$MAP_DIR/lab_map_new.yaml"
+LABELS="$MAP_DIR/lab_map_new_labels.json"
+```
+
+The map YAML, PGM, and labels JSON must describe the same map.
+
+## 3. Localize AMCL Before Navigation
+
+Edit:
+
+```text
+robot_navigation/src/qbot_platform/config/qbot_platform_slam_and_nav.yaml
+```
+
+The robot is configured not to assume one hard-coded startup pose:
+
+```yaml
+amcl:
+  ros__parameters:
+    set_initial_pose: false
+    always_reset_initial_pose: false
+    recovery_alpha_fast: 0.1
+    recovery_alpha_slow: 0.001
+```
+
+After navigation starts, open the browser labeler and press **Localize**. Confirm
+that the robot has clear space. The routine resets AMCL's particles across the
+map and slowly rotates the robot once to collect lidar matches. Press **Stop
+robot** at any time to interrupt it.
+
+On a large or repetitive map, one rotation may not uniquely identify the
+location. If the AMCL particle cloud remains spread out, move the robot to a
+distinctive nearby area and run **Localize** again. Alternatively, provide a
+rough pose through RViz's **2D Pose Estimate**.
+
+Common yaw values when using a manual pose estimate:
+
+```text
+ 0.0000 = map +X
+ 1.5708 = map +Y
+ 3.1416 = map -X
+-1.5708 = map -Y
+```
+
+Rebuild after changing these parameters.
+
+## 4. Start Autonomous Navigation
+
+```bash
+cd ~/qbot-log-rag
+./run_qbot_navigation.sh
+```
+
+Run this by itself. Do not simultaneously run `start_qbot.sh joystick`, the
+follower, or `ros2 run qbot_platform command`; those can start duplicate
+drivers or compete with Nav2 on `/cmd_vel`.
+
+Stop the navigation stack with `Ctrl+C` in this terminal.
+
+## 5. Prepare Every Additional Terminal
+
+```bash
+cd ~/qbot-log-rag
+export ROS_DOMAIN_ID=57
+source /opt/ros/humble/setup.bash
+source "$HOME/ros2/install/setup.bash"
+source "$PWD/robot_navigation/install/setup.bash"
+```
+
+All terminals must use the same `ROS_DOMAIN_ID`.
+
+## 6. Check AMCL
+
+Confirm the lifecycle state:
+
+```bash
+ros2 lifecycle get /amcl
+```
+
+Expected result:
+
+```text
+active [3]
+```
+
+Check the current estimated pose:
+
+```bash
+ros2 topic echo /amcl_pose --once
+```
+
+Check that automatic startup-pose injection is disabled:
+
+```bash
+ros2 param get /amcl set_initial_pose
+ros2 param get /amcl always_reset_initial_pose
+```
+
+Check sensor and transform inputs:
+
+```bash
+ros2 topic hz /scan_filtered
+ros2 topic hz /odom
+ros2 run tf2_ros tf2_echo odom base_link
+ros2 run tf2_ros tf2_echo map base_link
+```
+
+AMCL is probably localized when its pose is physically plausible and stable,
+and the laser scan aligns with the map. A published pose alone does not prove
+that it is correct.
+
+## 7. Reset Localization Only When Needed
+
+If the approximate robot position is known, use RViz's **2D Pose Estimate**. For
+a large map, this is preferable to searching the entire map.
+
+Use global localization only when the robot's location is completely unknown:
+
+```bash
+ros2 service call /reinitialize_global_localization std_srvs/srv/Empty "{}"
+```
+
+After calling it, slowly rotate and move the robot in a safe, distinctive area.
+Do not send a navigation goal until AMCL has converged.
+
+The browser's **Localize** button performs the global-localization reset and a
+slow 360-degree rotation without blind translational movement.
+
+## 8. Open the Browser Map Labeler
+
+On the robot:
+
+```bash
+cd ~/qbot-log-rag/robot_navigation
+export ROS_DOMAIN_ID=57
+source /opt/ros/humble/setup.bash
+source "$HOME/ros2/install/setup.bash"
+source install/setup.bash
+python3 tools/map_label_gui.py --host 0.0.0.0 --port 8765
+```
+
+Find the robot's IP if needed:
+
+```bash
+hostname -I
+```
+
+On a laptop connected to the same network, open:
+
+```text
+http://ROBOT_IP:8765
+```
+
+Select `lab_map_new.pgm`, click a known white/free location, enter its name, and
+press **Save Labels**. The **Go** button saves any pending changes, asks for
+confirmation, and publishes the selected name on `/label`.
+
+Press **Stop robot** at any time to cancel the active Nav2 goal and publish zero
+velocity commands. It also handles a stop pressed while Nav2 is still accepting
+the goal. The terminal equivalent is:
+
+```bash
+ros2 topic pub --once /label std_msgs/msg/String \
+  "{data: '__stop_navigation__'}"
+```
+
+The navigation stack must already be running for **Go** to work. The label
+listener reloads the JSON for every request, so newly saved labels do not
+require a Nav2 restart.
+
+## 9. Convert a PGM Pixel to Map Coordinates
+
+Pixel coordinates are measured from the image's top-left corner:
+
+```bash
+cd ~/qbot-log-rag
+python3 robot_navigation/tools/pixel_to_coordinates.py \
+  robot_navigation/maps/lab_map_new.yaml \
+  PIXEL_X PIXEL_Y
+```
+
+Example:
+
+```bash
+python3 robot_navigation/tools/pixel_to_coordinates.py \
+  robot_navigation/maps/lab_map_new.yaml \
+  5210.4 930.4
+```
+
+Do not use a gray/unknown or black/occupied pixel as a navigation goal. Choose
+white free space with enough clearance for the robot and inflated costmap.
+
+## 10. Validate and List Saved Labels
+
+Validate the JSON:
+
+```bash
+python3 -m json.tool \
+  robot_navigation/maps/lab_map_new_labels.json >/dev/null
+```
+
+No output means the JSON is valid.
+
+List labels and their world coordinates:
+
+```bash
+ros2 run qbot_platform go_to_label.py --list \
+  --labels-file "$PWD/robot_navigation/maps/lab_map_new_labels.json"
+```
+
+## 11. Navigate to a Label
+
+The navigation bringup starts a label listener on `/label`:
+
+```bash
+ros2 topic pub --once /label std_msgs/msg/String "{data: 'test_pose'}"
+```
+
+Replace `test_pose` with the exact saved label name. Watch the main navigation
+terminal for messages similar to:
+
+```text
+Received 'test_pose'; going to test_pose.
+Goal accepted.
+```
+
+To return to the saved `home` label:
+
+```bash
+ros2 topic pub --once /label std_msgs/msg/String "{data: 'home'}"
+```
+
+To observe the next reported navigation result, start this before sending the
+goal:
+
+```bash
+ros2 topic echo /robot/navigation_status --once
+```
+
+Common action status values:
+
+```text
+4 = succeeded
+5 = canceled
+6 = aborted
+```
+
+## 12. Goal Accuracy
+
+In `qbot_platform_slam_and_nav.yaml`, a practical starting point is:
+
+```yaml
+general_goal_checker:
+  plugin: "nav2_controller::SimpleGoalChecker"
+  stateful: false
+  xy_goal_tolerance: 0.10
+  yaw_goal_tolerance: 0.12
+```
+
+Do not set `xy_goal_tolerance` to `0.0`; a physical robot is unlikely to reach
+an exact floating-point coordinate and may eventually abort.
+
+## 13. RViz
+
+RViz requires a graphical display. On a graphical ROS machine:
+
+```bash
+export ROS_DOMAIN_ID=57
+rviz2
+```
+
+Use fixed frame `map`, then add `/map`, `/scan_filtered`, and `TF`.
+
+An ordinary headless SSH terminal produces `could not connect to display`.
+Use the browser labeler, SSH X forwarding, VNC, or RViz on another ROS machine.
+
+## 14. Quick Troubleshooting
+
+Show relevant nodes:
+
+```bash
+ros2 node list | grep -E 'amcl|map_server|planner|controller|go_to_label'
+```
+
+Show relevant topics:
+
+```bash
+ros2 topic list | grep -E 'amcl|map|scan|odom|label|navigation_status'
+```
+
+If a label publication succeeds but the robot does not move, check the main
+launch terminal for one of these conditions:
+
+```text
+No saved label matches ...   -> wrong labels file, unsaved label, or no restart
+Goal rejected                -> Nav2 is not ready or cannot accept the goal
+Goal aborted                 -> planning, localization, progress, or costmap issue
+```
+
+Also verify that:
+
+- `run_qbot_navigation.sh` selected the intended map and labels.
+- AMCL is active and localized on that map.
+- The label lies in known free space, not unknown or occupied space.
+- The joystick and follower are stopped.
+- Configuration changes were rebuilt and the launch was restarted.

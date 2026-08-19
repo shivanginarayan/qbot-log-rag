@@ -3,17 +3,18 @@
   "yaml": "lab_map_new.yaml",
   "labels": [
     {
-      "id": "mp28bc3v-jppec0",
-      "name": "Alyssa Kubota",
-      "kind": "person",
-      "detail": "SEIC 326",
-      "source": "seic_public_directory_with_schedule.xlsx",
-      "x": 906,
-      "y": 640,
+      "id": "test_pose",
+      "name": "test_pose",
+      "kind": "navigation",
+      "detail": "Test navigation pose",
+      "source": "manual",
+      "x": 5259.6,
+      "y": 262.6,
       "world": {
-        "x": 3.66,
-        "y": 0.17000000000000082
-      }
+        "x": -0.6039999999999992,
+        "y": 3.7240000000000038
+      },
+      "yaw": 0
     },
     {
       "id": "origin",
@@ -21,8 +22,8 @@
       "kind": "navigation",
       "detail": "Robot origin",
       "source": "auto",
-      "x": 540,
-      "y": 657,
+      "x": 5320,
+      "y": 635,
       "world": {
         "x": 0.0,
         "y": 0.0

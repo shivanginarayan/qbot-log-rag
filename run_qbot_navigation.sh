@@ -8,15 +8,19 @@ set -e
 
 # Directory containing this script = qbot-log-rag repository
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+echo "Repository: $REPO_DIR"
 
 # Navigation ROS2 workspace stored inside this repository
 NAV_DIR="$REPO_DIR/robot_navigation"
+echo "Navigation WS: $NAV_DIR"
+MAP_DIR="$NAV_DIR/maps"
+echo "Map dir: $MAP_DIR"
+MAP="$MAP_DIR/lab_map_new.yaml"
+echo "Map: $MAP"
+LABELS="$MAP_DIR/lab_map_new_labels.json"
+echo "Labels: $LABELS"
 
-MAP_DIR="$NAV_DIR/maps/home_test_v1"
-MAP="$MAP_DIR/home_test_v1.yaml"
-LABELS="$MAP_DIR/home_test_v1_labels.json"
-
-export ROS_DOMAIN_ID=57
+export ROS_DOMAIN_ID=63
 
 
 # ------------------------------------------------------------
@@ -33,7 +37,6 @@ echo "Map:           $MAP"
 echo "Labels:        $LABELS"
 echo "=========================================="
 
-
 # ------------------------------------------------------------
 # Check required files
 # ------------------------------------------------------------
@@ -43,12 +46,14 @@ if [ ! -d "$NAV_DIR/src/qbot_platform" ]; then
     echo "  $NAV_DIR/src/qbot_platform"
     exit 1
 fi
+echo "qbot_platform source found: $NAV_DIR/src/qbot_platform"
 
 if [ ! -f "$MAP" ]; then
     echo "ERROR: map not found:"
     echo "  $MAP"
     exit 1
 fi
+echo "Map found: $MAP"
 
 if [ ! -f "$LABELS" ]; then
     echo "ERROR: labels file not found:"
@@ -56,10 +61,11 @@ if [ ! -f "$LABELS" ]; then
     exit 1
 fi
 
-
+echo "Labels file found: $LABELS"
 # ------------------------------------------------------------
 # Source ROS2
 # ------------------------------------------------------------
+
 
 source /opt/ros/humble/setup.bash
 
@@ -90,14 +96,14 @@ if [ ! -f "$NAV_DIR/install/setup.bash" ]; then
     echo
     echo "Navigation workspace built successfully."
 fi
-
+echo "Navigation workspace is ready: $NAV_DIR/install/setup.bash"
 
 # ------------------------------------------------------------
 # Source our navigation workspace
 # ------------------------------------------------------------
 
 source "$NAV_DIR/install/setup.bash"
-
+echo "Sourced navigation workspace: $NAV_DIR/install/setup.bash"
 
 # ------------------------------------------------------------
 # Cleanup
@@ -117,14 +123,12 @@ cleanup() {
 
 trap cleanup INT TERM EXIT
 
-
 # ------------------------------------------------------------
 # Launch navigation
 # ------------------------------------------------------------
 
-echo
 echo "Starting QBot navigation..."
-echo
+
 
 ros2 launch qbot_platform \
     qbot_platform_map_nav_bringup_launch.py \
@@ -134,7 +138,7 @@ ros2 launch qbot_platform \
     use_breadcrumb_return:=false &
 
 NAV_PID=$!
-
+echo "Navigation process started with PID: $NAV_PID"
 
 # ------------------------------------------------------------
 # Wait for AMCL
@@ -181,3 +185,6 @@ echo "Press Ctrl+C here to stop the navigation stack."
 echo
 
 wait "$NAV_PID"
+
+#ros2 topic pub --once /label std_msgs/msg/String \     To call to test_pose
+#  "{data: 'test_pose'}"

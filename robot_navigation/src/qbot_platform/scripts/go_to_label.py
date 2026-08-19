@@ -20,6 +20,7 @@ from rclpy.qos import qos_profile_sensor_data
 from rclpy.utilities import remove_ros_args
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
+from std_srvs.srv import Empty
 
 
 def workspace_root():
@@ -35,6 +36,9 @@ LAST_LABEL_FILE = ROOT / "maps" / "last_navigation_label.json"
 FULL_SPIN_COMMAND = "__full_spin__"
 RETURN_STAGING_COMMAND = "__return_staging__"
 BREADCRUMB_RETURN_COMMAND = "__return_breadcrumbs__"
+STOP_NAVIGATION_COMMAND = "__stop_navigation__"
+LOCALIZE_COMMAND = "__localize__"
+LOCALIZATION_LABEL = "AMCL localization"
 
 ALIASES = {
     "dr zhang": "xiaorong zhang",
@@ -121,17 +125,36 @@ def find_label(labels, query):
     raise ValueError(f"No saved label matches {query!r}")
 
 
+def find_label_in_file(labels_file, query):
+    """Reload a labels JSON file and resolve one query against its latest contents."""
+    return find_label(load_labels(Path(labels_file)), query)
+
+
 class LabelNavigator(Node):
     def __init__(self, action_name, status_topic):
         super().__init__("go_to_label")
         self.action_name = action_name
         self.status_topic = status_topic
         self.client = ActionClient(self, NavigateToPose, action_name)
+        self.global_localization_client = self.create_client(
+            Empty,
+            "/reinitialize_global_localization",
+        )
         self.status_pub = self.create_publisher(String, status_topic, 10)
         self.cmd_vel_pub = self.create_publisher(Twist, "/cmd_vel", 10)
         self.labels = []
+        self.labels_file = None
         self.server_timeout_sec = 10.0
         self.active_goal_label = None
+        self.active_goal_handle = None
+        self.stop_requested = False
+        self.cancel_request_in_flight = False
+        self.localization_requested = False
+        self.localization_in_progress = False
+        self.localization_generation = 0
+        self.localization_timer = None
+        self.localization_end_time = 0.0
+        self.localization_angular_speed = 0.30
         self.latest_pose = None
         self.latest_scan = None
         self.create_subscription(
@@ -203,8 +226,9 @@ class LabelNavigator(Node):
         self.publish_navigation_status(label, result.status)
         return result.status
 
-    def listen_for_labels(self, labels, topic, timeout_sec):
-        self.labels = labels
+    def listen_for_labels(self, labels_file, topic, timeout_sec):
+        self.labels_file = Path(labels_file)
+        self.labels = load_labels(self.labels_file)
         self.server_timeout_sec = timeout_sec
 
         self.get_logger().info(f"Waiting for Nav2 action server {self.action_name}.")
@@ -212,11 +236,20 @@ class LabelNavigator(Node):
             raise RuntimeError(f"Nav2 action server {self.action_name} is not available")
 
         self.create_subscription(String, topic, self.label_callback, 10)
-        self.get_logger().info(f"Listening for label names on {topic}.")
+        self.get_logger().info(
+            f"Listening for label names on {topic}; reloading {self.labels_file} for each request."
+        )
 
     def label_callback(self, msg):
         query = msg.data.strip()
         if not query:
+            return
+        normalized_query = normalize(query)
+        if normalized_query == STOP_NAVIGATION_COMMAND:
+            self.request_navigation_stop()
+            return
+        if normalized_query == LOCALIZE_COMMAND:
+            self.request_localization()
             return
         if self.active_goal_label is not None:
             self.get_logger().warning(
@@ -225,7 +258,6 @@ class LabelNavigator(Node):
             return
 
         try:
-            normalized_query = normalize(query)
             if normalized_query == BREADCRUMB_RETURN_COMMAND:
                 self.get_logger().info("Ignoring breadcrumb return command.")
                 return
@@ -240,7 +272,10 @@ class LabelNavigator(Node):
             if normalized_query == RETURN_STAGING_COMMAND:
                 label = self.build_return_staging_label()
             else:
-                label = find_label(self.labels, query)
+                if self.labels_file is not None:
+                    label = find_label_in_file(self.labels_file, query)
+                else:
+                    label = find_label(self.labels, query)
             goal = self.build_goal(label)
         except Exception as exc:
             self.get_logger().error(str(exc))
@@ -258,9 +293,174 @@ class LabelNavigator(Node):
             return
 
         self.active_goal_label = label_display(label)
+        self.active_goal_handle = None
+        self.stop_requested = False
+        self.cancel_request_in_flight = False
         self.get_logger().info(f"Received {query!r}; going to {self.active_goal_label}.")
         send_future = self.client.send_goal_async(goal)
         send_future.add_done_callback(lambda future: self.handle_goal_response(future, label))
+
+    def request_navigation_stop(self):
+        """Stop motion now and cancel an active or currently-submitting Nav2 goal."""
+        localization_stopped = self.cancel_localization()
+        self.stop_robot()
+        if self.active_goal_label is None:
+            self.stop_requested = False
+            if localization_stopped:
+                self.get_logger().info("Stop requested; AMCL localization was stopped.")
+            else:
+                self.get_logger().info("Stop requested; robot stopped with no active navigation goal.")
+            return
+
+        self.stop_requested = True
+        if self.active_goal_handle is None:
+            self.get_logger().warning(
+                f"Stop requested while submitting {self.active_goal_label}; "
+                "it will be cancelled immediately if Nav2 accepts it."
+            )
+            return
+
+        self.cancel_active_goal()
+
+    def cancel_active_goal(self):
+        if self.active_goal_handle is None or self.cancel_request_in_flight:
+            return
+        self.cancel_request_in_flight = True
+        self.get_logger().warning(f"Cancelling navigation to {self.active_goal_label}.")
+        cancel_future = self.active_goal_handle.cancel_goal_async()
+        cancel_future.add_done_callback(self.handle_cancel_response)
+
+    def request_localization(self):
+        """Cancel navigation if needed, then globally localize with a slow 360-degree spin."""
+        if self.localization_requested or self.localization_in_progress:
+            self.get_logger().warning("AMCL localization is already in progress.")
+            return
+
+        self.localization_requested = True
+        if self.active_goal_label is not None:
+            self.get_logger().warning(
+                f"Stopping {self.active_goal_label} before starting AMCL localization."
+            )
+            self.stop_robot()
+            self.stop_requested = True
+            if self.active_goal_handle is not None:
+                self.cancel_active_goal()
+            return
+
+        self.begin_global_localization()
+
+    def begin_global_localization(self):
+        if not self.localization_requested or self.active_goal_label is not None:
+            return
+
+        self.localization_requested = False
+        self.localization_in_progress = True
+        self.localization_generation += 1
+        generation = self.localization_generation
+        self.active_goal_label = LOCALIZATION_LABEL
+        self.stop_robot()
+
+        self.get_logger().info(
+            "Requesting AMCL global localization. The robot will then rotate 360 degrees."
+        )
+        if not self.global_localization_client.service_is_ready():
+            self.finish_localization(
+                GoalStatus.STATUS_ABORTED,
+                "/reinitialize_global_localization is not ready; verify AMCL is active",
+            )
+            return
+
+        future = self.global_localization_client.call_async(Empty.Request())
+        future.add_done_callback(
+            lambda completed: self.handle_global_localization_response(
+                completed,
+                generation,
+            )
+        )
+
+    def handle_global_localization_response(self, future, generation):
+        if generation != self.localization_generation or not self.localization_in_progress:
+            return
+        try:
+            future.result()
+        except Exception as exc:
+            self.finish_localization(
+                GoalStatus.STATUS_ABORTED,
+                f"AMCL global localization failed: {exc}",
+            )
+            return
+
+        duration_sec = (2.0 * math.pi) / self.localization_angular_speed
+        self.localization_end_time = time.monotonic() + duration_sec
+        self.get_logger().info(
+            f"AMCL particles reset globally; rotating at "
+            f"{self.localization_angular_speed:.2f} rad/s for {duration_sec:.1f} seconds."
+        )
+        self.localization_timer = self.create_timer(
+            0.1,
+            lambda: self.localization_spin_tick(generation),
+        )
+
+    def localization_spin_tick(self, generation):
+        if generation != self.localization_generation or not self.localization_in_progress:
+            return
+        if time.monotonic() >= self.localization_end_time:
+            self.finish_localization(
+                GoalStatus.STATUS_SUCCEEDED,
+                "AMCL localization scan completed",
+            )
+            return
+
+        twist = Twist()
+        twist.angular.z = self.localization_angular_speed
+        self.cmd_vel_pub.publish(twist)
+
+    def cancel_localization(self):
+        if not self.localization_requested and not self.localization_in_progress:
+            return False
+        self.localization_requested = False
+        self.localization_in_progress = False
+        self.localization_generation += 1
+        if self.localization_timer is not None:
+            self.destroy_timer(self.localization_timer)
+            self.localization_timer = None
+        if self.active_goal_label == LOCALIZATION_LABEL:
+            self.active_goal_label = None
+        self.stop_robot()
+        self.publish_navigation_status(
+            self.virtual_label("localize", "AMCL global localization"),
+            GoalStatus.STATUS_CANCELED,
+        )
+        return True
+
+    def finish_localization(self, status, message):
+        if self.localization_timer is not None:
+            self.destroy_timer(self.localization_timer)
+            self.localization_timer = None
+        self.localization_requested = False
+        self.localization_in_progress = False
+        if self.active_goal_label == LOCALIZATION_LABEL:
+            self.active_goal_label = None
+        self.stop_robot()
+        log = self.get_logger().info if status == GoalStatus.STATUS_SUCCEEDED else self.get_logger().error
+        log(message)
+        self.publish_navigation_status(
+            self.virtual_label("localize", "AMCL global localization"),
+            status,
+        )
+
+    def handle_cancel_response(self, future):
+        self.cancel_request_in_flight = False
+        try:
+            response = future.result()
+            if response is None or not response.goals_canceling:
+                self.get_logger().error("Nav2 did not accept the goal cancellation request.")
+            else:
+                self.get_logger().info("Nav2 accepted the goal cancellation request.")
+        except Exception as exc:
+            self.get_logger().error(f"Could not cancel the Nav2 goal: {exc}")
+        finally:
+            self.stop_robot()
 
     def build_goal(self, label):
         world = label.get("world") or {}
@@ -432,17 +632,29 @@ class LabelNavigator(Node):
         if goal_handle is None or not goal_handle.accepted:
             self.get_logger().error("Nav2 rejected the goal")
             self.active_goal_label = None
+            self.active_goal_handle = None
+            self.stop_requested = False
+            self.cancel_request_in_flight = False
+            self.begin_global_localization()
             return
 
+        self.active_goal_handle = goal_handle
         self.get_logger().info("Goal accepted. Waiting for result.")
         result_future = goal_handle.get_result_async()
         result_future.add_done_callback(lambda future: self.handle_result(future, label))
+        if self.stop_requested:
+            self.cancel_active_goal()
 
     def handle_result(self, future, label):
         result = future.result()
         if result is None:
             self.get_logger().error("Nav2 did not return a result")
             self.active_goal_label = None
+            self.active_goal_handle = None
+            self.stop_requested = False
+            self.cancel_request_in_flight = False
+            self.stop_robot()
+            self.begin_global_localization()
             return
 
         if should_save_last_label(label):
@@ -455,8 +667,15 @@ class LabelNavigator(Node):
                 f"Navigation finished with status {result.status}. "
                 f"Skipped saving {LAST_LABEL_FILE} for {label.get('name')} label."
             )
+        was_stopped = self.stop_requested
         self.active_goal_label = None
+        self.active_goal_handle = None
+        self.stop_requested = False
+        self.cancel_request_in_flight = False
+        if was_stopped or result.status == GoalStatus.STATUS_CANCELED:
+            self.stop_robot()
         self.publish_navigation_status(label, result.status)
+        self.begin_global_localization()
 
     def publish_navigation_status(self, label, status):
         payload = {
@@ -542,7 +761,7 @@ def main():
     node = LabelNavigator(args.action_name, args.status_topic)
     try:
         if args.listen or not args.label:
-            node.listen_for_labels(labels, args.topic, args.server_timeout)
+            node.listen_for_labels(labels_file, args.topic, args.server_timeout)
             rclpy.spin(node)
         else:
             label = find_label(labels, args.label)
