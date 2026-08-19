@@ -209,6 +209,17 @@ Select `lab_map_new.pgm`, click a known white/free location, enter its name, and
 press **Save Labels**. The **Go** button saves any pending changes, asks for
 confirmation, and publishes the selected name on `/label`.
 
+When `/amcl_pose` is available, an orange **QBot** arrow shows AMCL's live
+position and heading on the selected map. The dashed circle represents the
+largest reported X/Y standard deviation; a large circle means the pose is
+uncertain. Make sure the browser is displaying the same map Nav2 loaded.
+
+Press **Save init_pose** to snapshot the current live pose into the selected
+map's labels JSON. `init_pose` then appears in the sidebar and behaves like any
+other saved navigation label, including its **Go** button. This is a return
+destination only—it does not set AMCL's startup pose. The snapshot is rejected
+if `/amcl_pose` is stale, outside the selected map, or not on free map space.
+
 Press **Stop robot** at any time to cancel the active Nav2 goal and publish zero
 velocity commands. It also handles a stop pressed while Nav2 is still accepting
 the goal. The terminal equivalent is:

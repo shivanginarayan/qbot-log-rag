@@ -12,10 +12,21 @@ import re
 import subprocess
 import tempfile
 import threading
+import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
+
+try:
+    import rclpy
+    from geometry_msgs.msg import PoseWithCovarianceStamped
+except ImportError as exc:
+    rclpy = None
+    PoseWithCovarianceStamped = None
+    RCLPY_IMPORT_ERROR = str(exc)
+else:
+    RCLPY_IMPORT_ERROR = ""
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -67,7 +78,10 @@ INDEX_HTML = r"""<!doctype html>
     .status.success { color: var(--success); }
     .viewer { position: relative; overflow: auto; background-color: var(--checker); background-image: linear-gradient(45deg,var(--checker2) 25%,transparent 25%,transparent 75%,var(--checker2) 75%),linear-gradient(45deg,var(--checker2) 25%,transparent 25%,transparent 75%,var(--checker2) 75%); background-size: 24px 24px; background-position: 0 0,12px 12px; }
     .canvas-wrap { width: max-content; min-width: 100%; min-height: 100%; padding: 24px; }
-    canvas { display: block; image-rendering: pixelated; background: var(--control); box-shadow: 0 10px 28px var(--canvas-shadow); transform-origin: top left; cursor: crosshair; }
+    .canvas-stage { position: relative; width: max-content; }
+    canvas { display: block; image-rendering: pixelated; transform-origin: top left; }
+    #mapCanvas { background: var(--control); box-shadow: 0 10px 28px var(--canvas-shadow); cursor: crosshair; }
+    #poseCanvas { position: absolute; inset: 0; pointer-events: none; }
     aside { display: grid; grid-template-rows: auto auto minmax(0, 1fr); min-height: 100vh; border-left: 1px solid var(--line); background: var(--panel); }
     .section { padding: 14px; border-bottom: 1px solid var(--line); }
     .section h2 { margin: 0 0 7px; font-size: 14px; }
@@ -82,6 +96,9 @@ INDEX_HTML = r"""<!doctype html>
     .label-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
     .label-meta { margin-top: 2px; color: var(--muted); font-size: 12px; }
     .badge { margin-left: 6px; color: var(--muted); font-size: 11px; }
+    .pose-status { margin-top: 10px; padding: 8px; border: 1px solid var(--line); border-radius: 7px; color: var(--muted); font-size: 12px; }
+    .pose-status.live { border-color: var(--success); color: var(--success); }
+    .pose-status.stale { border-color: var(--danger); color: var(--danger); }
     .empty { padding: 18px 8px; color: var(--muted); text-align: center; }
     .backdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 20px; background: var(--overlay); }
     .backdrop[hidden] { display: none; }
@@ -103,16 +120,17 @@ INDEX_HTML = r"""<!doctype html>
         <button id="zoomOutBtn">−</button><button id="zoomInBtn">+</button><button id="fitBtn">Fit</button>
         <span class="grow"></span>
         <button id="localizeBtn" class="localize" type="button" title="Reset AMCL globally and rotate to localize">Localize</button>
+        <button id="savePoseBtn" type="button" title="Save the live AMCL pose as init_pose" disabled>Save init_pose</button>
         <button id="stopBtn" class="stop" type="button" title="Cancel navigation and stop the robot">Stop robot</button>
         <button id="themeBtn" type="button" title="Switch color theme" aria-label="Switch color theme">Dark</button>
         <button id="saveBtn" class="primary" disabled>Save Labels</button>
         <button id="exportBtn">Export PNG</button>
       </div>
-      <div id="viewer" class="viewer"><div class="canvas-wrap"><canvas id="mapCanvas"></canvas></div></div>
+      <div id="viewer" class="viewer"><div class="canvas-wrap"><div class="canvas-stage"><canvas id="mapCanvas"></canvas><canvas id="poseCanvas"></canvas></div></div></div>
       <div id="status" class="status">Loading maps…</div>
     </main>
     <aside>
-      <section class="section"><h2>Add a location</h2><p class="hint">Click a white, navigable spot on the map, then give it a name.</p></section>
+      <section class="section"><h2>Add a location</h2><p class="hint">Click a white, navigable spot on the map, then give it a name.</p><div id="poseStatus" class="pose-status">QBot pose: waiting for /amcl_pose…</div></section>
       <section class="section">
         <h2>Selected label</h2>
         <div class="form-row"><input id="editInput" placeholder="Select a label" disabled><button id="renameBtn" disabled>Rename</button></div>
@@ -130,13 +148,13 @@ INDEX_HTML = r"""<!doctype html>
     </form>
   </div>
   <script>
-    const canvas = document.getElementById('mapCanvas'), ctx = canvas.getContext('2d');
+    const canvas = document.getElementById('mapCanvas'), ctx = canvas.getContext('2d'),poseCanvas=document.getElementById('poseCanvas'),poseCtx=poseCanvas.getContext('2d');
     const viewer = document.getElementById('viewer'), statusEl = document.getElementById('status');
     const mapSelect = document.getElementById('mapSelect'), editInput = document.getElementById('editInput');
     const labelList = document.getElementById('labelList'), saveBtn = document.getElementById('saveBtn');
     const addDialog = document.getElementById('addDialog'), addForm = document.getElementById('addForm');
     const addName = document.getElementById('addName'), addError = document.getElementById('addError');
-    const state = {mapName:null,mapImage:null,mapPixels:null,mapMeta:null,labels:[],selectedId:null,pendingPoint:null,zoom:1,dirty:false,saving:false,localizing:false};
+    const state = {mapName:null,mapImage:null,mapPixels:null,mapMeta:null,labels:[],selectedId:null,pendingPoint:null,zoom:1,dirty:false,saving:false,localizing:false,robotPose:null};
     let localizationUiTimer=null;
     const selectedMapStorageKey = 'qbot-map-labeler-selected-map';
     const newId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2,9)}`;
@@ -167,6 +185,13 @@ INDEX_HTML = r"""<!doctype html>
       const lx=x*resolution, ly=(canvas.height-y)*resolution, yaw=Number(origin[2]||0);
       return {x:Number(origin[0]||0)+Math.cos(yaw)*lx-Math.sin(yaw)*ly,y:Number(origin[1]||0)+Math.sin(yaw)*lx+Math.cos(yaw)*ly};
     }
+    function pixelFromWorld(x,y) {
+      const meta=state.mapMeta||{},resolution=Number(meta.resolution||0),origin=Array.isArray(meta.origin)?meta.origin:[0,0,0];
+      if(!resolution||!canvas.height)return null;
+      const dx=x-Number(origin[0]||0),dy=y-Number(origin[1]||0),yaw=Number(origin[2]||0);
+      const localX=Math.cos(yaw)*dx+Math.sin(yaw)*dy,localY=-Math.sin(yaw)*dx+Math.cos(yaw)*dy;
+      return {x:localX/resolution,y:canvas.height-localY/resolution};
+    }
     function pixelClassification(point) {
       if (!state.mapPixels) return 'unknown';
       const value=state.mapPixels[point.y*canvas.width+point.x], negate=Number(state.mapMeta?.negate||0);
@@ -186,6 +211,22 @@ INDEX_HTML = r"""<!doctype html>
         const text=label.name||'Label', offset=radius+5/scale, tx=x+offset, ty=y-offset, pad=5/scale, height=font+8/scale, width=ctx.measureText(text).width+pad*2;
         ctx.fillStyle='rgba(255,255,255,.9)'; ctx.fillRect(tx,ty-height/2,width,height); ctx.strokeStyle=selected?'#b23a48':'#08758a'; ctx.strokeRect(tx,ty-height/2,width,height); ctx.fillStyle='#172321'; ctx.fillText(text,tx+pad,ty);
       }
+      drawRobotPose();
+    }
+    function drawRobotPose() {
+      poseCtx.clearRect(0,0,poseCanvas.width,poseCanvas.height);
+      const pose=state.robotPose;
+      if(!pose?.available||!pose.world)return;
+      const point=pixelFromWorld(Number(pose.world.x),Number(pose.world.y));
+      if(!point||point.x<0||point.y<0||point.x>=canvas.width||point.y>=canvas.height)return;
+      const scale=Math.max(state.zoom,.01),resolution=Number(state.mapMeta?.resolution||.05),originYaw=Number(state.mapMeta?.origin?.[2]||0);
+      const uncertainty=Math.max(Number(pose.uncertainty?.x_std_dev||0),Number(pose.uncertainty?.y_std_dev||0));
+      const uncertaintyRadius=Math.min(180/scale,Math.max(0,uncertainty/resolution));
+      const markerRadius=Math.max(7,10/scale),arrowLength=Math.max(14,20/scale),color=pose.stale?'#b23a48':'#e68619';
+      poseCtx.save();poseCtx.translate(point.x,point.y);
+      if(uncertaintyRadius>markerRadius){poseCtx.beginPath();poseCtx.setLineDash([5/scale,4/scale]);poseCtx.lineWidth=Math.max(1.5,2/scale);poseCtx.strokeStyle=color;poseCtx.globalAlpha=.55;poseCtx.arc(0,0,uncertaintyRadius,0,Math.PI*2);poseCtx.stroke();poseCtx.globalAlpha=1;poseCtx.setLineDash([]);}
+      poseCtx.rotate(-(Number(pose.yaw||0)-originYaw));poseCtx.fillStyle=color;poseCtx.strokeStyle='#fff';poseCtx.lineWidth=Math.max(2,2/scale);poseCtx.beginPath();poseCtx.moveTo(arrowLength,0);poseCtx.lineTo(-markerRadius,markerRadius*.8);poseCtx.lineTo(-markerRadius,-markerRadius*.8);poseCtx.closePath();poseCtx.fill();poseCtx.stroke();poseCtx.restore();
+      const font=Math.max(14,13/scale);poseCtx.font=`700 ${font}px "JetBrains Mono",monospace`;poseCtx.textBaseline='bottom';poseCtx.fillStyle=color;poseCtx.strokeStyle='#fff';poseCtx.lineWidth=Math.max(2,3/scale);poseCtx.strokeText('QBot',point.x+markerRadius,point.y-markerRadius);poseCtx.fillText('QBot',point.x+markerRadius,point.y-markerRadius);
     }
     function selectLabel(label) { state.selectedId=label?.id||null; syncSelection(); renderList(); draw(); }
     function centerLabel(label) { viewer.scrollTo({left:Math.max(0,Number(label.x)*state.zoom-viewer.clientWidth/2),top:Math.max(0,Number(label.y)*state.zoom-viewer.clientHeight/2),behavior:'smooth'}); }
@@ -219,9 +260,10 @@ INDEX_HTML = r"""<!doctype html>
       Object.assign(state,{mapName:name,mapMeta:data.meta||{},labels:data.labels||[],selectedId:null,dirty:false,saving:false}); mapSelect.value=name;localStorage.setItem(selectedMapStorageKey,name);
       const bytes=Uint8Array.from(atob(data.pixels),c=>c.charCodeAt(0)); state.mapPixels=bytes; const image=ctx.createImageData(data.width,data.height);
       for(let i=0;i<bytes.length;i++){const j=i*4;image.data[j]=bytes[i];image.data[j+1]=bytes[i];image.data[j+2]=bytes[i];image.data[j+3]=255;}
-      canvas.width=data.width;canvas.height=data.height;state.mapImage=image;fitMap();syncSelection();renderList();updateSaveButton();setStatus(`${name}: ${data.width} × ${data.height}, ${state.labels.length} saved labels`,'success');
+      canvas.width=data.width;canvas.height=data.height;poseCanvas.width=data.width;poseCanvas.height=data.height;state.mapImage=image;fitMap();syncSelection();renderList();updateSaveButton();setStatus(`${name}: ${data.width} × ${data.height}, ${state.labels.length} saved labels`,'success');
+      updatePoseDisplay();
     }
-    function applyZoom(){canvas.style.width=`${canvas.width*state.zoom}px`;canvas.style.height=`${canvas.height*state.zoom}px`;draw();}
+    function applyZoom(){const width=`${canvas.width*state.zoom}px`,height=`${canvas.height*state.zoom}px`;canvas.style.width=width;canvas.style.height=height;poseCanvas.style.width=width;poseCanvas.style.height=height;draw();}
     function fitMap(){const pad=64,zx=Math.max(.01,(viewer.clientWidth-pad)/canvas.width),zy=Math.max(.01,(viewer.clientHeight-pad)/canvas.height);state.zoom=Math.max(.02,Math.min(3,Math.min(zx,zy)));applyZoom();}
     async function saveLabels(){
       if(!state.dirty)return{labels:state.labels}; state.saving=true;updateSaveButton();setStatus('Saving labels…');
@@ -247,6 +289,35 @@ INDEX_HTML = r"""<!doctype html>
       catch(error){setStatus(`Could not start localization: ${error.message}`,'error');}
       finally{if(!state.localizing)button.disabled=false;button.textContent=original;}
     }
+    function updatePoseDisplay(){
+      const element=document.getElementById('poseStatus'),button=document.getElementById('savePoseBtn'),pose=state.robotPose;
+      if(!pose?.available){element.className='pose-status';element.textContent=`QBot pose: ${pose?.reason||'waiting for /amcl_pose…'}`;button.disabled=true;drawRobotPose();return;}
+      const point=pixelFromWorld(Number(pose.world.x),Number(pose.world.y)),inside=point&&point.x>=0&&point.y>=0&&point.x<canvas.width&&point.y<canvas.height;
+      const positionStd=Math.max(Number(pose.uncertainty?.x_std_dev||0),Number(pose.uncertainty?.y_std_dev||0));
+      element.className=`pose-status ${pose.stale?'stale':'live'}`;element.textContent=`QBot ${pose.stale?'pose stale':'live'}: ${Number(pose.world.x).toFixed(2)}, ${Number(pose.world.y).toFixed(2)} · ±${positionStd.toFixed(2)} m${inside?'':' · outside selected map'}`;
+      button.disabled=Boolean(pose.stale||!inside);drawRobotPose();
+    }
+    async function refreshRobotPose(){
+      try{state.robotPose=await fetchJson('/api/robot-pose');}
+      catch(error){state.robotPose={available:false,reason:error.message};}
+      updatePoseDisplay();
+    }
+    async function saveInitialPose(){
+      const pose=state.robotPose,button=document.getElementById('savePoseBtn');
+      if(!pose?.available||pose.stale){setStatus('A fresh /amcl_pose is required before saving init_pose.','error');return;}
+      const point=pixelFromWorld(Number(pose.world.x),Number(pose.world.y));
+      if(!point||point.x<0||point.y<0||point.x>=canvas.width||point.y>=canvas.height){setStatus('The live QBot pose is outside the selected map. Select the map Nav2 is using.','error');return;}
+      const classification=pixelClassification({x:Math.round(point.x),y:Math.round(point.y)});
+      if(classification!=='free'){setStatus(`The live pose is on ${classification} map space and cannot be saved as init_pose.`,'error');return;}
+      let label=state.labels.find(candidate=>candidate.name.trim().toLowerCase()==='init_pose');
+      if(label&&!confirm('Update the existing init_pose label to the QBot’s current AMCL pose?'))return;
+      if(!label){label={id:newId()};state.labels.push(label);}
+      Object.assign(label,{name:'init_pose',kind:'navigation',detail:'Saved from live /amcl_pose',source:'browser',x:point.x,y:point.y,world:{x:Number(pose.world.x),y:Number(pose.world.y)},yaw:Number(pose.yaw||0)});
+      selectLabel(label);markDirty();button.disabled=true;
+      try{await saveLabels();const saved=state.labels.find(candidate=>candidate.id===label.id);if(saved)centerLabel(saved);}
+      catch(_error){}
+      finally{updatePoseDisplay();}
+    }
     function nearestLabel(point){const threshold=15/Math.max(state.zoom,.02);let nearest=null,distance=threshold;for(const label of state.labels){const d=Math.hypot(Number(label.x)-point.x,Number(label.y)-point.y);if(d<distance){nearest=label;distance=d;}}return nearest;}
     function openAddDialog(point){state.pendingPoint=point;const world=worldFromPixel(point.x,point.y);document.getElementById('addCoordinates').textContent=world?`Map coordinates: ${world.x.toFixed(3)}, ${world.y.toFixed(3)}`:`Pixel: ${point.x}, ${point.y}`;addName.value='';addError.textContent='';addDialog.hidden=false;requestAnimationFrame(()=>addName.focus());}
     function closeAddDialog(){state.pendingPoint=null;addDialog.hidden=true;addName.value='';addError.textContent='';}
@@ -262,9 +333,10 @@ INDEX_HTML = r"""<!doctype html>
     document.getElementById('themeBtn').addEventListener('click',()=>{const theme=document.documentElement.dataset.theme==='dark'?'light':'dark';localStorage.setItem('qbot-map-labeler-theme',theme);applyTheme(theme);});
     document.getElementById('stopBtn').addEventListener('click',stopNavigation);
     document.getElementById('localizeBtn').addEventListener('click',localizeRobot);
+    document.getElementById('savePoseBtn').addEventListener('click',saveInitialPose);
     document.getElementById('exportBtn').addEventListener('click',()=>{draw();const link=document.createElement('a');link.href=canvas.toDataURL('image/png');link.download=`${state.mapName.replace(/\.[^.]+$/,'')}_annotated.png`;link.click();});
     mapSelect.addEventListener('change',()=>{if(state.dirty&&!confirm('Switch maps and discard unsaved label changes?')){mapSelect.value=state.mapName;return;}loadMap(mapSelect.value).catch(error=>setStatus(error.message,'error'));});
-    window.addEventListener('beforeunload',event=>{if(state.dirty){event.preventDefault();event.returnValue='';}});window.addEventListener('resize',()=>{if(state.mapImage)applyZoom();});loadMaps().catch(error=>setStatus(error.message,'error'));
+    window.addEventListener('beforeunload',event=>{if(state.dirty){event.preventDefault();event.returnValue='';}});window.addEventListener('resize',()=>{if(state.mapImage)applyZoom();});loadMaps().then(refreshRobotPose).catch(error=>setStatus(error.message,'error'));setInterval(refreshRobotPose,1000);
   </script>
 </body>
 </html>
@@ -470,6 +542,118 @@ def publish_label(label_name: str, topic: str, timeout: float, ros_domain_id: in
         raise RuntimeError(detail or f"ros2 topic pub exited with status {result.returncode}")
 
 
+class RobotPoseMonitor:
+    """Keep the latest AMCL pose available to the HTTP server without polling ros2 CLI."""
+
+    def __init__(self, topic: str = "/amcl_pose") -> None:
+        self.topic = topic
+        self.lock = threading.Lock()
+        self.pose: dict | None = None
+        self.error = ""
+        self.node = None
+        self.subscription = None
+        self.thread: threading.Thread | None = None
+
+    def start(self, ros_domain_id: int) -> None:
+        if rclpy is None or PoseWithCovarianceStamped is None:
+            self.error = f"rclpy is unavailable: {RCLPY_IMPORT_ERROR}"
+            return
+
+        os.environ["ROS_DOMAIN_ID"] = str(ros_domain_id)
+        try:
+            if not rclpy.ok():
+                rclpy.init(args=None)
+            self.node = rclpy.create_node("qbot_map_labeler_pose_monitor")
+            self.subscription = self.node.create_subscription(
+                PoseWithCovarianceStamped,
+                self.topic,
+                self.pose_callback,
+                10,
+            )
+            self.thread = threading.Thread(
+                target=self.spin,
+                name="qbot-map-labeler-pose-monitor",
+                daemon=True,
+            )
+            self.thread.start()
+        except Exception as exc:
+            self.error = f"Could not subscribe to {self.topic}: {exc}"
+
+    def spin(self) -> None:
+        try:
+            rclpy.spin(self.node)
+        except Exception as exc:
+            with self.lock:
+                self.error = f"Pose monitor stopped: {exc}"
+
+    def pose_callback(self, message) -> None:
+        pose = message.pose.pose
+        orientation = pose.orientation
+        yaw = math.atan2(
+            2.0
+            * (
+                orientation.w * orientation.z
+                + orientation.x * orientation.y
+            ),
+            1.0
+            - 2.0
+            * (
+                orientation.y * orientation.y
+                + orientation.z * orientation.z
+            ),
+        )
+        covariance = list(message.pose.covariance)
+        with self.lock:
+            self.pose = {
+                "frame_id": message.header.frame_id or "map",
+                "world": {
+                    "x": float(pose.position.x),
+                    "y": float(pose.position.y),
+                },
+                "yaw": yaw,
+                "uncertainty": {
+                    "x_std_dev": math.sqrt(max(0.0, float(covariance[0]))),
+                    "y_std_dev": math.sqrt(max(0.0, float(covariance[7]))),
+                    "yaw_std_dev": math.sqrt(max(0.0, float(covariance[35]))),
+                },
+                "received_at": time.time(),
+            }
+            self.error = ""
+
+    def snapshot(self) -> dict:
+        with self.lock:
+            if self.pose is None:
+                return {
+                    "available": False,
+                    "topic": self.topic,
+                    "reason": self.error or f"Waiting for the first message on {self.topic}",
+                }
+            pose = {
+                **self.pose,
+                "world": dict(self.pose["world"]),
+                "uncertainty": dict(self.pose["uncertainty"]),
+            }
+        age = max(0.0, time.time() - pose["received_at"])
+        return {
+            "available": True,
+            "topic": self.topic,
+            "age_seconds": age,
+            "stale": age > 3.0,
+            **pose,
+        }
+
+    def stop(self) -> None:
+        if rclpy is not None and rclpy.ok():
+            rclpy.shutdown()
+        if self.thread is not None:
+            self.thread.join(timeout=2.0)
+        if self.node is not None:
+            self.node.destroy_node()
+        self.node = None
+        self.subscription = None
+        self.thread = None
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "MapLabelGUI/2.0"
 
@@ -515,6 +699,18 @@ class Handler(BaseHTTPRequestHandler):
                 map_path = self.resolve_map(parse_qs(parsed.query).get("name", [""])[0])
                 width, height, pixels = read_pgm(map_path)
                 self.write_json({"name": map_path.name, "width": width, "height": height, "pixels": base64.b64encode(pixels).decode(), "meta": parse_yaml(map_path.with_suffix(".yaml")), "labels": read_labels(map_path)})
+            elif parsed.path == "/api/robot-pose":
+                monitor = getattr(self.server, "pose_monitor", None)
+                if monitor is None:
+                    self.write_json(
+                        {
+                            "available": False,
+                            "topic": "/amcl_pose",
+                            "reason": "Pose monitor is not configured",
+                        }
+                    )
+                else:
+                    self.write_json(monitor.snapshot())
             else:
                 self.write_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
         except FileNotFoundError as exc:
@@ -633,6 +829,7 @@ def main() -> None:
     parser.add_argument("--host", default="0.0.0.0", help="Host/interface to bind")
     parser.add_argument("--port", type=int, default=8765, help="Port to listen on")
     parser.add_argument("--label-topic", default="/label", help="ROS String topic used by Go")
+    parser.add_argument("--pose-topic", default="/amcl_pose", help="AMCL pose topic shown on the map")
     parser.add_argument("--go-timeout", type=float, default=10, help="Seconds to wait for the ROS label publication")
     parser.add_argument(
         "--ros-domain-id",
@@ -650,16 +847,23 @@ def main() -> None:
     server.ros_domain_id = args.ros_domain_id
     server.navigation_lock = threading.Lock()
     server.stop_generation = 0
+    pose_monitor = RobotPoseMonitor(args.pose_topic)
+    pose_monitor.start(args.ros_domain_id)
+    server.pose_monitor = pose_monitor
     print(f"Map label GUI: http://{args.host}:{args.port}")
     print(f"Serving maps from: {MAPS_DIR}")
     print(f"Go publishes labels on: {args.label_topic}")
     print(f"Go uses ROS domain: {args.ros_domain_id}")
+    print(f"Live robot pose topic: {args.pose_topic}")
+    if pose_monitor.error:
+        print(f"WARNING: {pose_monitor.error}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nStopping map label GUI.")
     finally:
         server.server_close()
+        pose_monitor.stop()
 
 
 if __name__ == "__main__":
