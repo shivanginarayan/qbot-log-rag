@@ -1,0 +1,168 @@
+from init_db import initialize_database
+import os
+import socket
+import sqlite3
+import subprocess
+import time
+import uuid
+from datetime import datetime
+
+
+class SessionManager:
+    def __init__(
+        self,
+        base_log_dir="runtime_logs",
+        ros_domain_id=57,
+        map_name="home_test_v1",
+        map_yaml_path=None,
+        notes=None,
+    ):
+        self.base_log_dir = base_log_dir
+        self.ros_domain_id = ros_domain_id
+        self.map_name = map_name
+        self.map_yaml_path = map_yaml_path
+        self.notes = notes
+
+        self.session_id = None
+        self.session_dir = None
+        self.db_path = None
+        self.started_at_ns = None
+        self.started_at_iso = None
+
+    def _now(self):
+        now_ns = time.time_ns()
+        now_iso = datetime.now().astimezone().isoformat()
+        return now_ns, now_iso
+
+    def _git_commit(self):
+        try:
+            return subprocess.check_output(
+                ["git", "rev-parse", "HEAD"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+        except Exception:
+            return None
+
+    def _initialize_database(self):
+        conn = sqlite3.connect(self.db_path)
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_id TEXT PRIMARY KEY,
+
+                started_at_ns INTEGER NOT NULL,
+                started_at_iso TEXT NOT NULL,
+
+                ended_at_ns INTEGER,
+                ended_at_iso TEXT,
+
+                robot_id TEXT NOT NULL,
+                ros_domain_id INTEGER NOT NULL,
+
+                map_name TEXT,
+                map_yaml_path TEXT,
+
+                git_commit TEXT,
+
+                status TEXT NOT NULL,
+
+                notes TEXT
+            )
+        """)
+
+        conn.commit()
+        conn.close()
+
+    def start_session(self):
+        self.started_at_ns, self.started_at_iso = self._now()
+
+        human_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+        random_suffix = uuid.uuid4().hex[:4]
+
+        self.session_id = f"{human_time}_{random_suffix}"
+
+        self.session_dir = os.path.join(
+            self.base_log_dir,
+            f"session_{self.session_id}",
+        )
+
+        os.makedirs(self.session_dir, exist_ok=False)
+
+        self.db_path = os.path.join(
+            self.session_dir,
+            "robot.db",
+        )
+
+        initialize_database(self.db_path)
+
+        conn = sqlite3.connect(self.db_path)
+
+        conn.execute(
+            """
+            INSERT INTO sessions (
+                session_id,
+                started_at_ns,
+                started_at_iso,
+                robot_id,
+                ros_domain_id,
+                map_name,
+                map_yaml_path,
+                git_commit,
+                status,
+                notes
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                self.session_id,
+                self.started_at_ns,
+                self.started_at_iso,
+                socket.gethostname(),
+                self.ros_domain_id,
+                self.map_name,
+                self.map_yaml_path,
+                self._git_commit(),
+                "running",
+                self.notes,
+            ),
+        )
+
+        conn.commit()
+        conn.close()
+
+        print(f"Session started: {self.session_id}")
+        print(f"Session directory: {self.session_dir}")
+        print(f"Database: {self.db_path}")
+
+        return self.session_id
+
+    def close_session(self, status="completed"):
+        if self.db_path is None:
+            raise RuntimeError("No session has been started.")
+
+        ended_at_ns, ended_at_iso = self._now()
+
+        conn = sqlite3.connect(self.db_path)
+
+        conn.execute(
+            """
+            UPDATE sessions
+            SET ended_at_ns = ?,
+                ended_at_iso = ?,
+                status = ?
+            WHERE session_id = ?
+            """,
+            (
+                ended_at_ns,
+                ended_at_iso,
+                status,
+                self.session_id,
+            ),
+        )
+
+        conn.commit()
+        conn.close()
+
+        print(f"Session closed: {self.session_id}")
+        print(f"Status: {status}")
