@@ -197,16 +197,40 @@ class LabelNavigator(Node):
             f"at x={x:.3f}, y={y:.3f}, yaw={yaw:.3f}"
         )
         if not self.client.wait_for_server(timeout_sec=timeout_sec):
-            raise RuntimeError(f"Nav2 action server {self.action_name} is not available")
+            message = f"Nav2 action server {self.action_name} is not available"
+            self.publish_navigation_status(
+                label,
+                GoalStatus.STATUS_ABORTED,
+                message=message,
+            )
+            raise RuntimeError(message)
 
         send_future = self.client.send_goal_async(goal)
         rclpy.spin_until_future_complete(self, send_future)
-        goal_handle = send_future.result()
+        try:
+            goal_handle = send_future.result()
+        except Exception as exc:
+            self.publish_navigation_status(
+                label,
+                GoalStatus.STATUS_ABORTED,
+                message=f"Could not submit goal: {exc}",
+            )
+            raise
         if goal_handle is None or not goal_handle.accepted:
+            self.publish_navigation_status(
+                label,
+                GoalStatus.STATUS_ABORTED,
+                message="Nav2 rejected the goal",
+            )
             raise RuntimeError("Nav2 rejected the goal")
         self.active_goal_handle = goal_handle
 
         self.get_logger().info("Goal accepted. Waiting for result.")
+        self.publish_navigation_status(
+            label,
+            GoalStatus.STATUS_EXECUTING,
+            event="started",
+        )
         # result_future = goal_handle.get_result_async()
         # rclpy.spin_until_future_complete(self, result_future)
         result_future = goal_handle.get_result_async()
@@ -219,9 +243,27 @@ class LabelNavigator(Node):
             rclpy.spin_until_future_complete(self, cancel_future)
 
             self.stop_robot()
+            self.publish_navigation_status(
+                label,
+                GoalStatus.STATUS_CANCELED,
+                message="Navigation was interrupted",
+            )
             raise
-        result = result_future.result()
+        try:
+            result = result_future.result()
+        except Exception as exc:
+            self.publish_navigation_status(
+                label,
+                GoalStatus.STATUS_ABORTED,
+                message=f"Nav2 result failed: {exc}",
+            )
+            raise
         if result is None:
+            self.publish_navigation_status(
+                label,
+                GoalStatus.STATUS_ABORTED,
+                message="Nav2 did not return a result",
+            )
             raise RuntimeError("Nav2 did not return a result")
         self.publish_navigation_status(label, result.status)
         return result.status
@@ -257,6 +299,7 @@ class LabelNavigator(Node):
             )
             return
 
+        label = None
         try:
             if normalized_query == BREADCRUMB_RETURN_COMMAND:
                 self.get_logger().info("Ignoring breadcrumb return command.")
@@ -265,6 +308,11 @@ class LabelNavigator(Node):
                 label = self.virtual_label("full_spin", "Full spin")
                 self.active_goal_label = label_display(label)
                 self.get_logger().info("Received full spin command.")
+                self.publish_navigation_status(
+                    label,
+                    GoalStatus.STATUS_EXECUTING,
+                    event="started",
+                )
                 status = self.execute_full_spin()
                 self.active_goal_label = None
                 self.publish_navigation_status(label, status)
@@ -284,11 +332,19 @@ class LabelNavigator(Node):
                 self.publish_navigation_status(
                     self.virtual_label("full_spin", "Full spin"),
                     GoalStatus.STATUS_ABORTED,
+                    message=str(exc),
                 )
             elif normalized_query == RETURN_STAGING_COMMAND:
                 self.publish_navigation_status(
                     self.virtual_label("return_staging", "Return staging"),
                     GoalStatus.STATUS_ABORTED,
+                    message=str(exc),
+                )
+            elif label is not None:
+                self.publish_navigation_status(
+                    label,
+                    GoalStatus.STATUS_ABORTED,
+                    message=str(exc),
                 )
             return
 
@@ -363,6 +419,11 @@ class LabelNavigator(Node):
         self.get_logger().info(
             "Requesting AMCL global localization. The robot will then rotate 360 degrees."
         )
+        self.publish_navigation_status(
+            self.virtual_label("localize", "AMCL global localization"),
+            GoalStatus.STATUS_EXECUTING,
+            event="started",
+        )
         if not self.global_localization_client.service_is_ready():
             self.finish_localization(
                 GoalStatus.STATUS_ABORTED,
@@ -430,6 +491,7 @@ class LabelNavigator(Node):
         self.publish_navigation_status(
             self.virtual_label("localize", "AMCL global localization"),
             GoalStatus.STATUS_CANCELED,
+            message="Localization was stopped",
         )
         return True
 
@@ -447,6 +509,7 @@ class LabelNavigator(Node):
         self.publish_navigation_status(
             self.virtual_label("localize", "AMCL global localization"),
             status,
+            message=message,
         )
 
     def handle_cancel_response(self, future):
@@ -628,9 +691,28 @@ class LabelNavigator(Node):
         }
 
     def handle_goal_response(self, future, label):
-        goal_handle = future.result()
+        try:
+            goal_handle = future.result()
+        except Exception as exc:
+            self.get_logger().error(f"Could not submit goal: {exc}")
+            self.publish_navigation_status(
+                label,
+                GoalStatus.STATUS_ABORTED,
+                message=f"Could not submit goal: {exc}",
+            )
+            self.active_goal_label = None
+            self.active_goal_handle = None
+            self.stop_requested = False
+            self.cancel_request_in_flight = False
+            self.begin_global_localization()
+            return
         if goal_handle is None or not goal_handle.accepted:
             self.get_logger().error("Nav2 rejected the goal")
+            self.publish_navigation_status(
+                label,
+                GoalStatus.STATUS_ABORTED,
+                message="Nav2 rejected the goal",
+            )
             self.active_goal_label = None
             self.active_goal_handle = None
             self.stop_requested = False
@@ -640,15 +722,40 @@ class LabelNavigator(Node):
 
         self.active_goal_handle = goal_handle
         self.get_logger().info("Goal accepted. Waiting for result.")
+        self.publish_navigation_status(
+            label,
+            GoalStatus.STATUS_EXECUTING,
+            event="started",
+        )
         result_future = goal_handle.get_result_async()
         result_future.add_done_callback(lambda future: self.handle_result(future, label))
         if self.stop_requested:
             self.cancel_active_goal()
 
     def handle_result(self, future, label):
-        result = future.result()
+        try:
+            result = future.result()
+        except Exception as exc:
+            self.get_logger().error(f"Nav2 result failed: {exc}")
+            self.publish_navigation_status(
+                label,
+                GoalStatus.STATUS_ABORTED,
+                message=f"Nav2 result failed: {exc}",
+            )
+            self.active_goal_label = None
+            self.active_goal_handle = None
+            self.stop_requested = False
+            self.cancel_request_in_flight = False
+            self.stop_robot()
+            self.begin_global_localization()
+            return
         if result is None:
             self.get_logger().error("Nav2 did not return a result")
+            self.publish_navigation_status(
+                label,
+                GoalStatus.STATUS_ABORTED,
+                message="Nav2 did not return a result",
+            )
             self.active_goal_label = None
             self.active_goal_handle = None
             self.stop_requested = False
@@ -677,15 +784,24 @@ class LabelNavigator(Node):
         self.publish_navigation_status(label, result.status)
         self.begin_global_localization()
 
-    def publish_navigation_status(self, label, status):
+    def publish_navigation_status(
+        self,
+        label,
+        status,
+        *,
+        event="finished",
+        message=None,
+    ):
         payload = {
-            "event": "finished",
+            "event": event,
             "label": label_display(label),
             "name": label.get("name"),
             "kind": label.get("kind"),
             "detail": label.get("detail"),
             "status": status,
         }
+        if message:
+            payload["message"] = message
         msg = String()
         msg.data = json.dumps(payload)
         self.status_pub.publish(msg)

@@ -22,9 +22,11 @@ from urllib.parse import parse_qs, unquote, urlparse
 try:
     import rclpy
     from geometry_msgs.msg import PoseWithCovarianceStamped
+    from std_msgs.msg import String as RosString
 except ImportError as exc:
     rclpy = None
     PoseWithCovarianceStamped = None
+    RosString = None
     RCLPY_IMPORT_ERROR = str(exc)
 else:
     RCLPY_IMPORT_ERROR = ""
@@ -95,6 +97,7 @@ INDEX_HTML = r"""<!doctype html>
     .toast { position: fixed; z-index: 30; top: 16px; right: 16px; width: min(440px,calc(100vw - 32px)); padding: 13px 15px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); box-shadow: 0 16px 45px var(--canvas-shadow); }
     .toast.success { border-color: var(--success); color: var(--success); }
     .toast.error { border-color: var(--danger); color: var(--danger); }
+    .toast.warning { border-color: var(--warning); color: var(--warning); }
     .toast[hidden] { display: none; }
     .viewer { position: relative; overflow: auto; background-color: var(--checker); background-image: linear-gradient(45deg,var(--checker2) 25%,transparent 25%,transparent 75%,var(--checker2) 75%),linear-gradient(45deg,var(--checker2) 25%,transparent 25%,transparent 75%,var(--checker2) 75%); background-size: 24px 24px; background-position: 0 0,12px 12px; }
     .canvas-wrap { width: max-content; min-width: 100%; min-height: 100%; padding: 24px; }
@@ -111,11 +114,16 @@ INDEX_HTML = r"""<!doctype html>
     .label-list { overflow: auto; padding: 10px; }
     .label-item { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px; padding: 7px; margin-bottom: 8px; border: 1px solid var(--line); border-radius: 9px; background: var(--card); }
     .label-item.active { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(8,117,138,.14); }
+    .label-item.navigating { border-color: var(--warning); box-shadow: 0 0 0 2px rgba(154,93,0,.14); }
     .label-select { min-width: 0; height: auto; padding: 3px 5px; border: 0; background: transparent; text-align: left; }
     .go { align-self: center; color: var(--accent2); font-weight: 700; }
     .label-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
     .label-meta { margin-top: 2px; color: var(--muted); font-size: 12px; }
     .badge { margin-left: 6px; color: var(--muted); font-size: 11px; }
+    .navigation-badge { display: inline-flex; align-items: center; gap: 5px; margin-left: 7px; color: var(--warning); font-size: 11px; }
+    .navigation-badge::before { width: 7px; height: 7px; border-radius: 50%; background: currentColor; content: ""; animation: navigation-pulse 1.2s ease-in-out infinite; }
+    @keyframes navigation-pulse { 50% { opacity: .3; transform: scale(.75); } }
+    @media (prefers-reduced-motion: reduce) { .navigation-badge::before { animation: none; } }
     .pose-status { margin-top: 10px; padding: 8px; border: 1px solid var(--line); border-radius: 7px; color: var(--muted); font-size: 12px; }
     .pose-status.live { border-color: var(--success); color: var(--success); }
     .pose-status.stale { border-color: var(--danger); color: var(--danger); }
@@ -186,8 +194,8 @@ INDEX_HTML = r"""<!doctype html>
     const labelList = document.getElementById('labelList'), saveBtn = document.getElementById('saveBtn');
     const addDialog = document.getElementById('addDialog'), addForm = document.getElementById('addForm');
     const addName = document.getElementById('addName'), addError = document.getElementById('addError');
-    const state = {mapName:null,mapImage:null,mapPixels:null,mapMeta:null,labels:[],selectedId:null,pendingPoint:null,zoom:1,dirty:false,saving:false,localizing:false,robotPose:null,navigation:{state:'stopped',active_map:null,ready:false,message:'Navigation is stopped.',error:null,managed_process:false}};
-    let localizationUiTimer=null,toastTimer=null,lastNavigationState='stopped';
+    const state = {mapName:null,mapImage:null,mapPixels:null,mapMeta:null,labels:[],selectedId:null,pendingPoint:null,zoom:1,dirty:false,saving:false,localizing:false,robotPose:null,navigation:{state:'stopped',active_map:null,ready:false,message:'Navigation is stopped.',error:null,managed_process:false},goal:{available:false,sequence:0,event:'idle',outcome:'idle'}};
+    let localizationUiTimer=null,toastTimer=null,lastNavigationState='stopped',lastGoalSequence=0,goalStatusInitialized=false;
     const selectedMapStorageKey = 'qbot-map-labeler-selected-map';
     const newId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2,9)}`;
     const activeLabel = () => state.labels.find(label => label.id === state.selectedId);
@@ -237,6 +245,38 @@ INDEX_HTML = r"""<!doctype html>
     async function refreshNavigationStatus(){
       try{applyNavigationStatus(await fetchJson('/api/navigation/status'));}
       catch(error){applyNavigationStatus({state:'error',active_map:null,ready:false,message:error.message,error:error.message,managed_process:false});}
+    }
+    function goalMatchesLabel(label){
+      const goal=state.goal;if(!goal?.available||goal.event!=='running')return false;
+      if(goal.map&&goal.map!==state.mapName)return false;
+      if(goal.label_id)return goal.label_id===label.id;
+      return String(goal.name||'').toLowerCase()===String(label.name||'').toLowerCase();
+    }
+    function goalResultMessage(goal){
+      const name=goal.label||goal.name||'the goal',detail=goal.message?` ${goal.message}`:'';
+      if(goal.name==='localize'){
+        if(goal.outcome==='succeeded')return{message:'AMCL localization completed successfully.',tone:'success'};
+        if(goal.outcome==='canceled')return{message:`AMCL localization was canceled.${detail}`,tone:'warning'};
+        return{message:`AMCL localization failed.${detail}`,tone:'error'};
+      }
+      if(goal.outcome==='succeeded')return{message:`QBot reached “${name}”.`,tone:'success'};
+      if(goal.outcome==='canceled')return{message:`Navigation to “${name}” was canceled.${detail}`,tone:'warning'};
+      return{message:`QBot failed to reach “${name}”.${detail}`,tone:'error'};
+    }
+    function applyGoalStatus(goal){
+      const sequence=Number(goal?.sequence||0),isNew=sequence>lastGoalSequence,wasInitialized=goalStatusInitialized;
+      state.goal=goal||{available:false,sequence:0,event:'idle',outcome:'idle'};goalStatusInitialized=true;lastGoalSequence=Math.max(lastGoalSequence,sequence);
+      if(state.goal.name==='localize'&&state.goal.event==='finished'){state.localizing=false;if(localizationUiTimer)clearTimeout(localizationUiTimer);localizationUiTimer=null;document.getElementById('localizeBtn').disabled=!selectedMapIsActive();}
+      if(isNew&&state.goal.event==='running'){setStatus(`Navigating to ${state.goal.label||state.goal.name||'goal'}…`);}
+      const age=Number(state.goal.age_seconds),recent=Number.isFinite(age)&&age<3;
+      if(isNew&&state.goal.event==='finished'&&(wasInitialized||recent)){
+        const result=goalResultMessage(state.goal);showToast(result.message,result.tone);setStatus(result.message,result.tone==='warning'?'':result.tone);
+      }
+      renderList();
+    }
+    async function refreshGoalStatus(){
+      try{applyGoalStatus(await fetchJson('/api/navigation/goal-status'));}
+      catch(error){if(!goalStatusInitialized)applyGoalStatus({available:false,sequence:0,event:'idle',outcome:'idle',reason:error.message});}
     }
     function updateSaveButton() { saveBtn.disabled = !state.dirty || state.saving; saveBtn.textContent = state.saving ? 'Saving…' : 'Save Labels'; }
     function canvasPoint(event) { const rect=canvas.getBoundingClientRect(); return {x:Math.round((event.clientX-rect.left)*canvas.width/rect.width),y:Math.round((event.clientY-rect.top)*canvas.height/rect.height)}; }
@@ -295,14 +335,16 @@ INDEX_HTML = r"""<!doctype html>
       labelList.innerHTML='';
       if (!state.labels.length) { labelList.innerHTML='<div class="empty">No labels yet. Click a white spot on the map to add one.</div>'; return; }
       for (const label of state.labels) {
-        const item=document.createElement('div'); item.className=`label-item ${label.id===state.selectedId?'active':''}`;
+        const navigating=goalMatchesLabel(label),goalRunning=state.goal?.event==='running';
+        const item=document.createElement('div'); item.className=`label-item ${label.id===state.selectedId?'active':''} ${navigating?'navigating':''}`.trim();
         const select=document.createElement('button'); select.className='label-select'; select.type='button';
         const world=label.world||worldFromPixel(Number(label.x),Number(label.y));
         select.innerHTML='<div class="label-name"></div><div class="label-meta"></div>'; select.querySelector('.label-name').textContent=label.name;
         if (isOrigin(label)) { const badge=document.createElement('span'); badge.className='badge'; badge.textContent='system'; select.querySelector('.label-name').appendChild(badge); }
+        if(navigating){const badge=document.createElement('span');badge.className='navigation-badge';badge.textContent='Navigating';select.querySelector('.label-name').appendChild(badge);}
         select.querySelector('.label-meta').textContent=world?`map ${Number(world.x).toFixed(2)}, ${Number(world.y).toFixed(2)}`:`pixel ${label.x}, ${label.y}`;
         select.addEventListener('click',()=>{selectLabel(label);centerLabel(label);});
-        const go=document.createElement('button'); go.className='go'; go.type='button'; go.textContent='Go'; go.disabled=state.localizing||!selectedMapIsActive();go.title=state.localizing?'Wait for localization or press Stop':(!selectedMapIsActive()?'Start navigation with this displayed map first':`Navigate to ${label.name}`); go.addEventListener('click',()=>goToLabel(label,go));
+        const go=document.createElement('button'); go.className='go'; go.type='button'; go.textContent=navigating?'Running…':'Go'; go.disabled=state.localizing||!selectedMapIsActive()||goalRunning;go.title=state.localizing?'Wait for localization or press Stop':(!selectedMapIsActive()?'Start navigation with this displayed map first':(goalRunning?'Wait for the current navigation goal to finish':`Navigate to ${label.name}`)); go.addEventListener('click',()=>goToLabel(label,go));
         item.append(select,go); labelList.appendChild(item);
       }
     }
@@ -332,10 +374,10 @@ INDEX_HTML = r"""<!doctype html>
       catch(error){state.dirty=true;setStatus(`Save failed: ${error.message}`,'error');throw error;}finally{state.saving=false;updateSaveButton();applyNavigationStatus(state.navigation);}
     }
     async function goToLabel(label,button){
-      try{if(!selectedMapIsActive())throw new Error('Start navigation with the displayed map before using Go.');if(state.dirty)await saveLabels();const saved=state.labels.find(candidate=>candidate.id===label.id);if(!saved)throw new Error('The label was not found after saving.');const world=saved.world||worldFromPixel(saved.x,saved.y),coords=world?` (${Number(world.x).toFixed(2)}, ${Number(world.y).toFixed(2)})`:'';if(!confirm(`Send the robot to “${saved.name}”${coords}?`))return;
+      try{if(!selectedMapIsActive())throw new Error('Start navigation with the displayed map before using Go.');if(state.goal?.event==='running')throw new Error('Wait for the current navigation goal to finish or press Stop robot.');if(state.dirty)await saveLabels();const saved=state.labels.find(candidate=>candidate.id===label.id);if(!saved)throw new Error('The label was not found after saving.');const world=saved.world||worldFromPixel(saved.x,saved.y),coords=world?` (${Number(world.x).toFixed(2)}, ${Number(world.y).toFixed(2)})`:'';if(!confirm(`Send the robot to “${saved.name}”${coords}?`))return;
         const original=button.textContent;button.disabled=true;button.textContent='Sending…';setStatus(`Sending navigation command for ${saved.name}…`);
-        try{const data=await fetchJson('/api/go',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({map:state.mapName,label_id:saved.id})});if(data.cancelled_by_stop)setStatus(`Navigation to ${data.name} was cancelled by Stop.`,'success');else setStatus(`Navigation command sent for ${data.name} on ${data.topic} (ROS domain ${data.ros_domain_id})`,'success');}finally{button.disabled=false;button.textContent=original;}}
-      catch(error){setStatus(`Could not navigate: ${error.message}`,'error');}
+        try{const data=await fetchJson('/api/go',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({map:state.mapName,label_id:saved.id})});if(data.goal)applyGoalStatus(data.goal);if(data.cancelled_by_stop)setStatus(`Navigation to ${data.name} was cancelled by Stop.`,'success');else if(!data.goal||data.goal.event==='running')setStatus(`Navigating to ${data.name} on ROS domain ${data.ros_domain_id}…`,'success');}finally{button.disabled=false;button.textContent=original;renderList();}}
+      catch(error){setStatus(`Could not navigate: ${error.message}`,'error');await refreshGoalStatus();}
     }
     async function stopNavigation(){
       const button=document.getElementById('stopBtn'),original=button.textContent;button.disabled=true;button.textContent='Stopping…';setStatus('Sending emergency navigation stop…','error');
@@ -425,7 +467,7 @@ INDEX_HTML = r"""<!doctype html>
     document.getElementById('savePoseBtn').addEventListener('click',saveInitialPose);
     document.getElementById('exportBtn').addEventListener('click',()=>{draw();const link=document.createElement('a');link.href=canvas.toDataURL('image/png');link.download=`${state.mapName.replace(/\.[^.]+$/,'')}_annotated.png`;link.click();});
     mapSelect.addEventListener('change',()=>{if(state.dirty&&!confirm('Switch maps and discard unsaved label changes?')){mapSelect.value=state.mapName;return;}loadMap(mapSelect.value).catch(error=>setStatus(error.message,'error'));});
-    window.addEventListener('beforeunload',event=>{if(state.dirty){event.preventDefault();event.returnValue='';}});window.addEventListener('resize',()=>{if(state.mapImage)applyZoom();});Promise.all([loadMaps(),refreshNavigationStatus()]).then(refreshRobotPose).catch(error=>setStatus(error.message,'error'));setInterval(refreshRobotPose,1000);setInterval(refreshNavigationStatus,1000);
+    window.addEventListener('beforeunload',event=>{if(state.dirty){event.preventDefault();event.returnValue='';}});window.addEventListener('resize',()=>{if(state.mapImage)applyZoom();});Promise.all([loadMaps(),refreshNavigationStatus(),refreshGoalStatus()]).then(refreshRobotPose).catch(error=>setStatus(error.message,'error'));setInterval(refreshRobotPose,1000);setInterval(refreshNavigationStatus,1000);setInterval(refreshGoalStatus,750);
   </script>
 </body>
 </html>
@@ -1132,19 +1174,27 @@ class NavigationManager:
 
 
 class RobotPoseMonitor:
-    """Keep the latest AMCL pose available to the HTTP server without polling ros2 CLI."""
+    """Keep live AMCL pose and navigation results available to the HTTP server."""
 
-    def __init__(self, topic: str = "/amcl_pose") -> None:
+    def __init__(
+        self,
+        topic: str = "/amcl_pose",
+        navigation_status_topic: str = "/robot/navigation_status",
+    ) -> None:
         self.topic = topic
+        self.navigation_status_topic = navigation_status_topic
         self.lock = threading.Lock()
         self.pose: dict | None = None
+        self.navigation_event: dict | None = None
+        self.navigation_sequence = 0
         self.error = ""
         self.node = None
         self.subscription = None
+        self.navigation_status_subscription = None
         self.thread: threading.Thread | None = None
 
     def start(self, ros_domain_id: int) -> None:
-        if rclpy is None or PoseWithCovarianceStamped is None:
+        if rclpy is None or PoseWithCovarianceStamped is None or RosString is None:
             self.error = f"rclpy is unavailable: {RCLPY_IMPORT_ERROR}"
             return
 
@@ -1157,6 +1207,12 @@ class RobotPoseMonitor:
                 PoseWithCovarianceStamped,
                 self.topic,
                 self.pose_callback,
+                10,
+            )
+            self.navigation_status_subscription = self.node.create_subscription(
+                RosString,
+                self.navigation_status_topic,
+                self.navigation_status_callback,
                 10,
             )
             self.thread = threading.Thread(
@@ -1209,6 +1265,123 @@ class RobotPoseMonitor:
             }
             self.error = ""
 
+    @staticmethod
+    def navigation_outcome(status: int | None, event: str) -> str:
+        if event in {"started", "running"} or status in {1, 2, 3}:
+            return "running"
+        if status == 4:
+            return "succeeded"
+        if status == 5:
+            return "canceled"
+        return "failed"
+
+    def _store_navigation_event(self, payload: dict) -> dict:
+        event = str(payload.get("event") or "finished").strip().casefold()
+        if event == "started":
+            normalized_event = "running"
+        elif event in {"running", "finished"}:
+            normalized_event = event
+        else:
+            normalized_event = "finished"
+        raw_status = payload.get("status")
+        try:
+            status = int(raw_status) if raw_status is not None else None
+        except (TypeError, ValueError):
+            status = None
+        with self.lock:
+            previous = self.navigation_event or {}
+            same_goal = (
+                str(previous.get("name") or "").casefold()
+                == str(payload.get("name") or "").casefold()
+            )
+            self.navigation_sequence += 1
+            stored = {
+                "available": True,
+                "sequence": self.navigation_sequence,
+                "event": normalized_event,
+                "outcome": self.navigation_outcome(status, normalized_event),
+                "status": status,
+                "name": payload.get("name"),
+                "label": payload.get("label") or payload.get("name"),
+                "kind": payload.get("kind"),
+                "detail": payload.get("detail"),
+                "message": payload.get("message"),
+                "map": payload.get("map") or (previous.get("map") if same_goal else None),
+                "label_id": payload.get("label_id") or (previous.get("label_id") if same_goal else None),
+                "received_at": time.time(),
+            }
+            self.navigation_event = stored
+            return dict(stored)
+
+    def navigation_status_callback(self, message) -> None:
+        try:
+            payload = json.loads(message.data)
+            if not isinstance(payload, dict):
+                raise ValueError("navigation status must be a JSON object")
+            self._store_navigation_event(payload)
+        except Exception as exc:
+            print(f"WARNING: Ignoring invalid {self.navigation_status_topic} message: {exc}")
+
+    def goal_started(self, label: dict, map_name: str) -> dict:
+        return self._store_navigation_event(
+            {
+                "event": "running",
+                "status": 2,
+                "name": label.get("name"),
+                "label": label.get("name"),
+                "kind": label.get("kind"),
+                "detail": label.get("detail"),
+                "map": map_name,
+                "label_id": label.get("id"),
+            }
+        )
+
+    def goal_publish_failed(self, label: dict, map_name: str, message: str) -> dict:
+        return self._store_navigation_event(
+            {
+                "event": "finished",
+                "status": 6,
+                "name": label.get("name"),
+                "label": label.get("name"),
+                "kind": label.get("kind"),
+                "detail": label.get("detail"),
+                "map": map_name,
+                "label_id": label.get("id"),
+                "message": message,
+            }
+        )
+
+    def interrupt_active_goal(self, message: str) -> dict | None:
+        with self.lock:
+            active = dict(self.navigation_event) if self.navigation_event else None
+        if active is None or active.get("event") != "running":
+            return None
+        return self._store_navigation_event(
+            {
+                **active,
+                "event": "finished",
+                "status": 5,
+                "message": message,
+            }
+        )
+
+    def navigation_snapshot(self) -> dict:
+        with self.lock:
+            if self.navigation_event is None:
+                return {
+                    "available": False,
+                    "topic": self.navigation_status_topic,
+                    "sequence": self.navigation_sequence,
+                    "event": "idle",
+                    "outcome": "idle",
+                }
+            event = dict(self.navigation_event)
+        return {
+            **event,
+            "topic": self.navigation_status_topic,
+            "age_seconds": max(0.0, time.time() - event["received_at"]),
+        }
+
     def snapshot(self) -> dict:
         with self.lock:
             if self.pose is None:
@@ -1240,6 +1413,7 @@ class RobotPoseMonitor:
             self.node.destroy_node()
         self.node = None
         self.subscription = None
+        self.navigation_status_subscription = None
         self.thread = None
 
 
@@ -1280,6 +1454,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def navigation_manager(self) -> NavigationManager | None:
         return getattr(self.server, "navigation_manager", None)
+
+    def goal_monitor(self):
+        monitor = getattr(self.server, "pose_monitor", None)
+        if monitor is None or not hasattr(monitor, "navigation_snapshot"):
+            return None
+        return monitor
 
     def require_navigation_map(self, map_name: str) -> None:
         manager = self.navigation_manager()
@@ -1333,7 +1513,29 @@ class Handler(BaseHTTPRequestHandler):
                         HTTPStatus.SERVICE_UNAVAILABLE,
                     )
                 else:
-                    self.write_json(manager.snapshot())
+                    navigation_status = manager.snapshot()
+                    if navigation_status["state"] in {"stopped", "error"}:
+                        monitor = self.goal_monitor()
+                        if monitor is not None:
+                            monitor.interrupt_active_goal(
+                                "Navigation stack stopped before the goal finished"
+                            )
+                    self.write_json(navigation_status)
+            elif parsed.path == "/api/navigation/goal-status":
+                monitor = self.goal_monitor()
+                if monitor is None:
+                    self.write_json(
+                        {
+                            "available": False,
+                            "topic": "/robot/navigation_status",
+                            "sequence": 0,
+                            "event": "idle",
+                            "outcome": "idle",
+                            "reason": "Navigation result monitor is not configured",
+                        }
+                    )
+                else:
+                    self.write_json(monitor.navigation_snapshot())
             else:
                 self.write_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
         except FileNotFoundError as exc:
@@ -1362,14 +1564,27 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 topic = str(getattr(self.server, "label_topic", "/label"))
                 ros_domain_id = int(getattr(self.server, "ros_domain_id", 63))
+                monitor = self.goal_monitor()
+                if monitor is not None:
+                    current_goal = monitor.navigation_snapshot()
+                    if current_goal.get("event") == "running":
+                        raise NavigationConflictError(
+                            f"Already navigating to {current_goal.get('label') or current_goal.get('name') or 'another goal'}"
+                        )
+                    monitor.goal_started(label, map_path.name)
                 with self.server.navigation_lock:
                     stop_generation = self.server.stop_generation
-                publish_label(
-                    label["name"],
-                    topic,
-                    float(getattr(self.server, "go_timeout", 10)),
-                    ros_domain_id,
-                )
+                try:
+                    publish_label(
+                        label["name"],
+                        topic,
+                        float(getattr(self.server, "go_timeout", 10)),
+                        ros_domain_id,
+                    )
+                except Exception as exc:
+                    if monitor is not None:
+                        monitor.goal_publish_failed(label, map_path.name, str(exc))
+                    raise
                 with self.server.navigation_lock:
                     cancelled_by_stop = self.server.stop_generation != stop_generation
                 if cancelled_by_stop:
@@ -1388,6 +1603,7 @@ class Handler(BaseHTTPRequestHandler):
                         "topic": topic,
                         "ros_domain_id": ros_domain_id,
                         "cancelled_by_stop": cancelled_by_stop,
+                        "goal": monitor.navigation_snapshot() if monitor is not None else None,
                     }
                 )
             elif self.path == "/api/stop":
@@ -1448,12 +1664,20 @@ class Handler(BaseHTTPRequestHandler):
                 manager = self.navigation_manager()
                 if manager is None:
                     raise RuntimeError("Navigation manager is not configured")
+                monitor = self.goal_monitor()
+                if monitor is not None:
+                    monitor.interrupt_active_goal(
+                        "A new navigation stack was started before the goal finished"
+                    )
                 self.write_json(manager.start(map_path), HTTPStatus.ACCEPTED)
             elif self.path == "/api/navigation/stop":
                 self.read_json_body()
                 manager = self.navigation_manager()
                 if manager is None:
                     raise RuntimeError("Navigation manager is not configured")
+                monitor = self.goal_monitor()
+                if monitor is not None:
+                    monitor.interrupt_active_goal("Navigation stack was stopped")
                 self.write_json(manager.stop(), HTTPStatus.ACCEPTED)
             elif self.path == "/api/navigation/rebuild":
                 self.read_json_body()
@@ -1479,6 +1703,11 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8765, help="Port to listen on")
     parser.add_argument("--label-topic", default="/label", help="ROS String topic used by Go")
     parser.add_argument("--pose-topic", default="/amcl_pose", help="AMCL pose topic shown on the map")
+    parser.add_argument(
+        "--navigation-status-topic",
+        default="/robot/navigation_status",
+        help="ROS String topic containing navigation start/result events",
+    )
     parser.add_argument("--go-timeout", type=float, default=10, help="Seconds to wait for the ROS label publication")
     parser.add_argument(
         "--navigation-timeout",
@@ -1504,7 +1733,10 @@ def main() -> None:
     server.ros_domain_id = args.ros_domain_id
     server.navigation_lock = threading.Lock()
     server.stop_generation = 0
-    pose_monitor = RobotPoseMonitor(args.pose_topic)
+    pose_monitor = RobotPoseMonitor(
+        args.pose_topic,
+        args.navigation_status_topic,
+    )
     pose_monitor.start(args.ros_domain_id)
     server.pose_monitor = pose_monitor
     navigation_manager = NavigationManager(
@@ -1517,6 +1749,7 @@ def main() -> None:
     print(f"Go publishes labels on: {args.label_topic}")
     print(f"Go uses ROS domain: {args.ros_domain_id}")
     print(f"Live robot pose topic: {args.pose_topic}")
+    print(f"Navigation result topic: {args.navigation_status_topic}")
     if pose_monitor.error:
         print(f"WARNING: {pose_monitor.error}")
     try:
