@@ -160,20 +160,15 @@ that successful run still allowed 0.25 m position tolerance.
 
 Starting Navigation
 
-From the project repository:
+From the project repository, start the browser controller:
 
-./run_qbot_navigation.sh
+./run_qbot_map_labeler.sh
 
-The script:
-
-sets ROS_DOMAIN_ID=57,
-sources ROS2 and QBot workspaces,
-starts the saved-map navigation stack,
-enables filtered LiDAR for Nav2,
-loads the home labels,
-waits for AMCL,
-keeps the launch process in one terminal,
-stops the navigation stack when Ctrl+C is pressed.
+Select the desired map in the website and press Start Navigation. The website
+uses ROS_DOMAIN_ID=63, saves the matching labels JSON, builds if necessary,
+starts the filtered-LiDAR Nav2 stack, and notifies the page when it is ready.
+Use Stop Navigation before starting a different selected map. Build and launch
+logs remain in the terminal that runs the website.
 Next Stage: Log Analysis
 
 The next stage is to record generic robot evidence rather than

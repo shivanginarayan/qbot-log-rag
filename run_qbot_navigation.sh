@@ -1,190 +1,173 @@
 #!/usr/bin/env bash
 
-set -e
+set -eo pipefail
 
-# ------------------------------------------------------------
-# Paths
-# ------------------------------------------------------------
+RUN_REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RUN_NAV_DIR="$RUN_REPO_DIR/robot_navigation"
+RUN_MAP_DIR="$RUN_NAV_DIR/maps"
+RUN_QBOT_SETUP="$HOME/ros2/install/setup.bash"
+RUN_MAP=""
+RUN_LABELS=""
+RUN_SCAN_FILTER="$RUN_NAV_DIR/filters/scan_wedge_filter.json"
 
-# Directory containing this script = qbot-log-rag repository
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-echo "Repository: $REPO_DIR"
+usage() {
+    echo "Usage: $0 --map MAP.yaml [--labels LABELS.json] [--scan-filter-file FILTER.json]"
+    echo
+    echo "The map is required. If --labels is omitted, <map_stem>_labels.json is used."
+    echo "Maps available in $RUN_MAP_DIR:"
+    local candidate
+    for candidate in "$RUN_MAP_DIR"/*.yaml; do
+        [ -e "$candidate" ] || continue
+        case "$candidate" in
+            *.labels.yaml) continue ;;
+        esac
+        echo "  $(basename "$candidate")"
+    done
+}
 
-# Navigation ROS2 workspace stored inside this repository
-NAV_DIR="$REPO_DIR/robot_navigation"
-echo "Navigation WS: $NAV_DIR"
-MAP_DIR="$NAV_DIR/maps"
-echo "Map dir: $MAP_DIR"
-MAP="$MAP_DIR/lab_map_new.yaml"
-echo "Map: $MAP"
-LABELS="$MAP_DIR/lab_map_new_labels.json"
-echo "Labels: $LABELS"
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --map)
+            [ "$#" -ge 2 ] || { echo "ERROR: --map requires a path"; usage; exit 2; }
+            RUN_MAP="$2"
+            shift 2
+            ;;
+        --labels)
+            [ "$#" -ge 2 ] || { echo "ERROR: --labels requires a path"; usage; exit 2; }
+            RUN_LABELS="$2"
+            shift 2
+            ;;
+        --scan-filter-file)
+            [ "$#" -ge 2 ] || { echo "ERROR: --scan-filter-file requires a path"; usage; exit 2; }
+            RUN_SCAN_FILTER="$2"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "ERROR: Unknown argument: $1"
+            usage
+            exit 2
+            ;;
+    esac
+done
 
-export ROS_DOMAIN_ID=63
+if [ -z "$RUN_MAP" ]; then
+    echo "ERROR: --map is required."
+    usage
+    exit 2
+fi
 
+case "$RUN_MAP" in
+    *.yaml) ;;
+    *) echo "ERROR: --map must point to a .yaml file: $RUN_MAP"; exit 2 ;;
+esac
 
-# ------------------------------------------------------------
-# Display configuration
-# ------------------------------------------------------------
+if [ -z "$RUN_LABELS" ]; then
+    RUN_LABELS="${RUN_MAP%.yaml}_labels.json"
+fi
+
+if [ ! -d "$RUN_NAV_DIR/src/qbot_platform" ]; then
+    echo "ERROR: qbot_platform source not found: $RUN_NAV_DIR/src/qbot_platform"
+    exit 1
+fi
+if [ ! -f "$RUN_MAP" ]; then
+    echo "ERROR: map not found: $RUN_MAP"
+    exit 1
+fi
+if [ ! -f "$RUN_LABELS" ]; then
+    echo "ERROR: labels file not found: $RUN_LABELS"
+    exit 1
+fi
+if [ ! -f "$RUN_SCAN_FILTER" ]; then
+    echo "ERROR: scan filter file not found: $RUN_SCAN_FILTER"
+    exit 1
+fi
+if [ ! -f /opt/ros/humble/setup.bash ]; then
+    echo "ERROR: ROS Humble setup not found: /opt/ros/humble/setup.bash"
+    exit 1
+fi
+if [ ! -f "$RUN_QBOT_SETUP" ]; then
+    echo "ERROR: QBot ROS workspace setup not found: $RUN_QBOT_SETUP"
+    exit 1
+fi
+
+RUN_MAP="$(realpath "$RUN_MAP")"
+RUN_LABELS="$(realpath "$RUN_LABELS")"
+RUN_SCAN_FILTER="$(realpath "$RUN_SCAN_FILTER")"
+export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-63}"
 
 echo "=========================================="
 echo " QBot Navigation"
 echo "=========================================="
-echo "Repository:    $REPO_DIR"
-echo "Navigation WS: $NAV_DIR"
+echo "Repository:    $RUN_REPO_DIR"
+echo "Navigation WS: $RUN_NAV_DIR"
 echo "ROS_DOMAIN_ID: $ROS_DOMAIN_ID"
-echo "Map:           $MAP"
-echo "Labels:        $LABELS"
+echo "Map:           $RUN_MAP"
+echo "Labels:        $RUN_LABELS"
+echo "Scan filter:   $RUN_SCAN_FILTER"
 echo "=========================================="
 
-# ------------------------------------------------------------
-# Check required files
-# ------------------------------------------------------------
-
-if [ ! -d "$NAV_DIR/src/qbot_platform" ]; then
-    echo "ERROR: qbot_platform source not found:"
-    echo "  $NAV_DIR/src/qbot_platform"
-    exit 1
-fi
-echo "qbot_platform source found: $NAV_DIR/src/qbot_platform"
-
-if [ ! -f "$MAP" ]; then
-    echo "ERROR: map not found:"
-    echo "  $MAP"
-    exit 1
-fi
-echo "Map found: $MAP"
-
-if [ ! -f "$LABELS" ]; then
-    echo "ERROR: labels file not found:"
-    echo "  $LABELS"
-    exit 1
-fi
-
-echo "Labels file found: $LABELS"
-# ------------------------------------------------------------
-# Source ROS2
-# ------------------------------------------------------------
-
-
 source /opt/ros/humble/setup.bash
+source "$RUN_QBOT_SETUP"
 
-# QBot/Quanser ROS workspace installed on the robot
-if [ -f "$HOME/ros2/install/setup.bash" ]; then
-    source "$HOME/ros2/install/setup.bash"
-else
-    echo "ERROR: QBot ROS2 workspace not found:"
-    echo "  $HOME/ros2/install/setup.bash"
-    exit 1
-fi
-
-
-# ------------------------------------------------------------
-# Build navigation workspace if this is a fresh clone
-# ------------------------------------------------------------
-
-if [ ! -f "$NAV_DIR/install/setup.bash" ]; then
+if [ ! -f "$RUN_NAV_DIR/install/setup.bash" ]; then
     echo
-    echo "Navigation workspace has not been built yet."
-    echo "Building qbot_platform..."
-    echo
-
-    cd "$NAV_DIR"
-
+    echo "Navigation workspace has not been built. Building qbot_platform..."
+    cd "$RUN_NAV_DIR"
     colcon build --packages-select qbot_platform
-
-    echo
-    echo "Navigation workspace built successfully."
 fi
-echo "Navigation workspace is ready: $NAV_DIR/install/setup.bash"
 
-# ------------------------------------------------------------
-# Source our navigation workspace
-# ------------------------------------------------------------
+source "$RUN_NAV_DIR/install/setup.bash"
+cd "$RUN_REPO_DIR"
 
-source "$NAV_DIR/install/setup.bash"
-echo "Sourced navigation workspace: $NAV_DIR/install/setup.bash"
-
-# ------------------------------------------------------------
-# Cleanup
-# ------------------------------------------------------------
-
-NAV_PID=""
-
+RUN_NAV_PID=""
 cleanup() {
-    echo
-    echo "Stopping QBot navigation..."
-
-    if [ -n "$NAV_PID" ]; then
-        kill "$NAV_PID" 2>/dev/null || true
-        wait "$NAV_PID" 2>/dev/null || true
+    if [ -n "$RUN_NAV_PID" ]; then
+        echo
+        echo "Stopping QBot navigation..."
+        kill "$RUN_NAV_PID" 2>/dev/null || true
+        wait "$RUN_NAV_PID" 2>/dev/null || true
+        RUN_NAV_PID=""
     fi
 }
-
 trap cleanup INT TERM EXIT
 
-# ------------------------------------------------------------
-# Launch navigation
-# ------------------------------------------------------------
-
 echo "Starting QBot navigation..."
-
-
 ros2 launch qbot_platform \
     qbot_platform_map_nav_bringup_launch.py \
-    map:="$MAP" \
-    labels_file:="$LABELS" \
+    map:="$RUN_MAP" \
+    labels_file:="$RUN_LABELS" \
+    scan_filter_file:="$RUN_SCAN_FILTER" \
     use_scan_filter:=true \
     use_breadcrumb_return:=false &
 
-NAV_PID=$!
-echo "Navigation process started with PID: $NAV_PID"
-
-# ------------------------------------------------------------
-# Wait for AMCL
-# ------------------------------------------------------------
-
-echo "Navigation process PID: $NAV_PID"
+RUN_NAV_PID=$!
+echo "Navigation process started with PID: $RUN_NAV_PID"
 echo "Waiting for AMCL..."
 
 until ros2 node list 2>/dev/null | grep -qx "/amcl"; do
-
-    if ! kill -0 "$NAV_PID" 2>/dev/null; then
-        echo
-        echo "ERROR: navigation process exited before AMCL started."
+    if ! kill -0 "$RUN_NAV_PID" 2>/dev/null; then
+        echo "ERROR: navigation exited before AMCL started."
+        wait "$RUN_NAV_PID" || true
+        RUN_NAV_PID=""
         exit 1
     fi
-
     sleep 1
 done
 
-
-# ------------------------------------------------------------
-# Ready
-# ------------------------------------------------------------
-
 echo
 echo "=========================================="
-echo " QBot navigation is ready"
+echo " QBot navigation is starting on the ROS graph"
+echo " The website will notify you when Nav2 is ready"
 echo "=========================================="
-echo
-echo "Global localization:"
-echo
-echo '  ros2 service call /reinitialize_global_localization std_srvs/srv/Empty "{}"'
-echo
-echo "Go home:"
-echo
-echo "  ros2 run qbot_platform go_to_label.py gohome \\"
-echo "    --labels-file \"$LABELS\""
-echo
-echo "Current location:"
-echo
-echo "  ros2 topic echo /amcl_pose --once"
-echo
 echo "Press Ctrl+C here to stop the navigation stack."
-echo
 
-wait "$NAV_PID"
-
-#ros2 topic pub --once /label std_msgs/msg/String \     To call to test_pose
-#  "{data: 'test_pose'}"
+set +e
+wait "$RUN_NAV_PID"
+RUN_EXIT_CODE=$?
+set -e
+RUN_NAV_PID=""
+exit "$RUN_EXIT_CODE"

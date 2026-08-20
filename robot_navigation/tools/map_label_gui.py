@@ -9,6 +9,7 @@ import json
 import math
 import os
 import re
+import signal
 import subprocess
 import tempfile
 import threading
@@ -31,6 +32,11 @@ else:
 
 ROOT = Path(__file__).resolve().parents[1]
 MAPS_DIR = ROOT / "maps"
+REPO_DIR = ROOT.parent
+RUN_NAVIGATION_SCRIPT = REPO_DIR / "run_qbot_navigation.sh"
+REBUILD_NAVIGATION_SCRIPT = REPO_DIR / "rebuild_qbot_navigation.sh"
+NAVIGATION_SETUP = ROOT / "install" / "setup.bash"
+SCAN_FILTER_FILE = ROOT / "filters" / "scan_wedge_filter.json"
 
 
 INDEX_HTML = r"""<!doctype html>
@@ -44,7 +50,7 @@ INDEX_HTML = r"""<!doctype html>
       color-scheme: light;
       --bg: #eef3f1; --panel: #fff; --ink: #172321; --muted: #64726f;
       --line: #cad6d2; --accent: #08758a; --accent2: #055468;
-      --danger: #b23a48; --success: #19734a; --control: #fff;
+      --danger: #b23a48; --success: #19734a; --warning: #9a5d00; --control: #fff;
       --toolbar: rgba(255,255,255,.94); --checker: #dce5e1; --checker2: #eaf0ed;
       --card: #fbfcfb; --canvas-shadow: rgba(20,32,31,.16); --overlay: rgba(14,25,23,.46);
     }
@@ -52,7 +58,7 @@ INDEX_HTML = r"""<!doctype html>
       color-scheme: dark;
       --bg: #111917; --panel: #182320; --ink: #ecf4f1; --muted: #9aaca7;
       --line: #344640; --accent: #39b6cc; --accent2: #77d4e3;
-      --danger: #ff8a98; --success: #69d59d; --control: #202d29;
+      --danger: #ff8a98; --success: #69d59d; --warning: #ffbf69; --control: #202d29;
       --toolbar: rgba(24,35,32,.95); --checker: #202e2a; --checker2: #293a35;
       --card: #1c2925; --canvas-shadow: rgba(0,0,0,.42); --overlay: rgba(0,0,0,.66);
     }
@@ -70,12 +76,26 @@ INDEX_HTML = r"""<!doctype html>
     button:disabled { opacity: .48; cursor: not-allowed; }
     input, select { padding: 0 10px; }
     .app { display: grid; grid-template-columns: minmax(0, 1fr) 360px; min-height: 100vh; }
-    .main { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; }
+    .main { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; min-width: 0; }
     .toolbar, .status { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--toolbar); }
     .toolbar .grow { flex: 1; }
     .status { min-height: 44px; border-top: 1px solid var(--line); border-bottom: 0; color: var(--muted); }
     .status.error { color: var(--danger); }
     .status.success { color: var(--success); }
+    .navigation-panel { display: grid; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
+    .navigation-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .navigation-row .grow { flex: 1; }
+    .nav-state { padding: 5px 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-weight: 700; text-transform: capitalize; }
+    .nav-state.ready { border-color: var(--success); color: var(--success); }
+    .nav-state.error { border-color: var(--danger); color: var(--danger); }
+    .nav-state.building, .nav-state.starting, .nav-state.stopping { border-color: var(--warning); color: var(--warning); }
+    .nav-message { color: var(--muted); }
+    .map-warning { padding: 9px 11px; border: 1px solid var(--warning); border-radius: 8px; color: var(--warning); background: var(--card); }
+    .map-warning[hidden] { display: none; }
+    .toast { position: fixed; z-index: 30; top: 16px; right: 16px; width: min(440px,calc(100vw - 32px)); padding: 13px 15px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); box-shadow: 0 16px 45px var(--canvas-shadow); }
+    .toast.success { border-color: var(--success); color: var(--success); }
+    .toast.error { border-color: var(--danger); color: var(--danger); }
+    .toast[hidden] { display: none; }
     .viewer { position: relative; overflow: auto; background-color: var(--checker); background-image: linear-gradient(45deg,var(--checker2) 25%,transparent 25%,transparent 75%,var(--checker2) 75%),linear-gradient(45deg,var(--checker2) 25%,transparent 25%,transparent 75%,var(--checker2) 75%); background-size: 24px 24px; background-position: 0 0,12px 12px; }
     .canvas-wrap { width: max-content; min-width: 100%; min-height: 100%; padding: 24px; }
     .canvas-stage { position: relative; width: max-content; }
@@ -126,6 +146,17 @@ INDEX_HTML = r"""<!doctype html>
         <button id="saveBtn" class="primary" disabled>Save Labels</button>
         <button id="exportBtn">Export PNG</button>
       </div>
+      <div class="navigation-panel">
+        <div class="navigation-row">
+          <span id="navState" class="nav-state">Stopped</span>
+          <span id="navMessage" class="nav-message">Navigation is stopped.</span>
+          <span class="grow"></span>
+          <button id="rebuildNavBtn" type="button">Rebuild</button>
+          <button id="startNavBtn" class="primary" type="button">Start Navigation</button>
+          <button id="stopNavBtn" class="danger" type="button" disabled>Stop Navigation</button>
+        </div>
+        <div id="mapWarning" class="map-warning" hidden></div>
+      </div>
       <div id="viewer" class="viewer"><div class="canvas-wrap"><div class="canvas-stage"><canvas id="mapCanvas"></canvas><canvas id="poseCanvas"></canvas></div></div></div>
       <div id="status" class="status">Loading maps…</div>
     </main>
@@ -147,6 +178,7 @@ INDEX_HTML = r"""<!doctype html>
       <div class="modal-actions"><button id="cancelAddBtn" type="button">Cancel</button><button type="submit" class="primary">Add label</button></div>
     </form>
   </div>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <script>
     const canvas = document.getElementById('mapCanvas'), ctx = canvas.getContext('2d'),poseCanvas=document.getElementById('poseCanvas'),poseCtx=poseCanvas.getContext('2d');
     const viewer = document.getElementById('viewer'), statusEl = document.getElementById('status');
@@ -154,8 +186,8 @@ INDEX_HTML = r"""<!doctype html>
     const labelList = document.getElementById('labelList'), saveBtn = document.getElementById('saveBtn');
     const addDialog = document.getElementById('addDialog'), addForm = document.getElementById('addForm');
     const addName = document.getElementById('addName'), addError = document.getElementById('addError');
-    const state = {mapName:null,mapImage:null,mapPixels:null,mapMeta:null,labels:[],selectedId:null,pendingPoint:null,zoom:1,dirty:false,saving:false,localizing:false,robotPose:null};
-    let localizationUiTimer=null;
+    const state = {mapName:null,mapImage:null,mapPixels:null,mapMeta:null,labels:[],selectedId:null,pendingPoint:null,zoom:1,dirty:false,saving:false,localizing:false,robotPose:null,navigation:{state:'stopped',active_map:null,ready:false,message:'Navigation is stopped.',error:null,managed_process:false}};
+    let localizationUiTimer=null,toastTimer=null,lastNavigationState='stopped';
     const selectedMapStorageKey = 'qbot-map-labeler-selected-map';
     const newId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2,9)}`;
     const activeLabel = () => state.labels.find(label => label.id === state.selectedId);
@@ -177,6 +209,35 @@ INDEX_HTML = r"""<!doctype html>
     applyTheme(initialTheme());
 
     function setStatus(message, tone='') { statusEl.textContent = message; statusEl.className = `status ${tone}`.trim(); }
+    function selectedMapIsActive(){return Boolean(state.navigation?.ready&&state.navigation.active_map===state.mapName);}
+    function showToast(message,tone='success'){
+      const toast=document.getElementById('toast');toast.textContent=message;toast.className=`toast ${tone}`;toast.hidden=false;
+      if(toastTimer)clearTimeout(toastTimer);toastTimer=setTimeout(()=>{toast.hidden=true;toastTimer=null;},6500);
+    }
+    function applyNavigationStatus(status){
+      const previous=lastNavigationState,previousNavigation=state.navigation,wasLocalizing=state.localizing;state.navigation=status;lastNavigationState=status.state;
+      const stateEl=document.getElementById('navState'),messageEl=document.getElementById('navMessage'),warning=document.getElementById('mapWarning');
+      stateEl.textContent=status.state||'unknown';stateEl.className=`nav-state ${status.state||''}`.trim();messageEl.textContent=status.error||status.message||'';
+      const busy=['building','starting','stopping'].includes(status.state),canStart=['stopped','error'].includes(status.state);
+      document.getElementById('startNavBtn').disabled=!state.mapName||!canStart||state.saving;
+      document.getElementById('stopNavBtn').disabled=!(status.managed_process||['building','starting','ready'].includes(status.state))||status.state==='stopping';
+      document.getElementById('rebuildNavBtn').disabled=!canStart;
+      document.getElementById('stopBtn').disabled=!status.ready;
+      const mapMismatch=Boolean(status.active_map&&state.mapName&&status.active_map!==state.mapName&&['building','starting','ready','stopping'].includes(status.state));
+      warning.hidden=!mapMismatch;
+      if(mapMismatch)warning.textContent=`Displayed map: ${state.mapName}. Active Nav2 map: ${status.active_map}. Stop Navigation, then Start Navigation to use the displayed map.`;
+      if(previous!=='ready'&&status.state==='ready')showToast(`Navigation is ready with ${status.active_map}.`,'success');
+      if(previous==='building'&&status.state==='stopped'&&String(status.message||'').toLowerCase().includes('build completed'))showToast('Navigation build completed successfully.','success');
+      if(previous!=='error'&&status.state==='error')showToast(`${status.error||status.message} Check the terminal for details.`,'error');
+      if(!busy&&status.state!=='ready'&&state.localizing){state.localizing=false;if(localizationUiTimer)clearTimeout(localizationUiTimer);localizationUiTimer=null;}
+      document.getElementById('localizeBtn').disabled=!selectedMapIsActive()||state.localizing;
+      if(previousNavigation.state!==status.state||previousNavigation.active_map!==status.active_map||previousNavigation.ready!==status.ready||wasLocalizing!==state.localizing)renderList();
+      updatePoseDisplay();
+    }
+    async function refreshNavigationStatus(){
+      try{applyNavigationStatus(await fetchJson('/api/navigation/status'));}
+      catch(error){applyNavigationStatus({state:'error',active_map:null,ready:false,message:error.message,error:error.message,managed_process:false});}
+    }
     function updateSaveButton() { saveBtn.disabled = !state.dirty || state.saving; saveBtn.textContent = state.saving ? 'Saving…' : 'Save Labels'; }
     function canvasPoint(event) { const rect=canvas.getBoundingClientRect(); return {x:Math.round((event.clientX-rect.left)*canvas.width/rect.width),y:Math.round((event.clientY-rect.top)*canvas.height/rect.height)}; }
     function worldFromPixel(x,y) {
@@ -216,7 +277,7 @@ INDEX_HTML = r"""<!doctype html>
     function drawRobotPose() {
       poseCtx.clearRect(0,0,poseCanvas.width,poseCanvas.height);
       const pose=state.robotPose;
-      if(!pose?.available||!pose.world)return;
+      if(!selectedMapIsActive()||!pose?.available||!pose.world)return;
       const point=pixelFromWorld(Number(pose.world.x),Number(pose.world.y));
       if(!point||point.x<0||point.y<0||point.x>=canvas.width||point.y>=canvas.height)return;
       const scale=Math.max(state.zoom,.01),resolution=Number(state.mapMeta?.resolution||.05),originYaw=Number(state.mapMeta?.origin?.[2]||0);
@@ -241,7 +302,7 @@ INDEX_HTML = r"""<!doctype html>
         if (isOrigin(label)) { const badge=document.createElement('span'); badge.className='badge'; badge.textContent='system'; select.querySelector('.label-name').appendChild(badge); }
         select.querySelector('.label-meta').textContent=world?`map ${Number(world.x).toFixed(2)}, ${Number(world.y).toFixed(2)}`:`pixel ${label.x}, ${label.y}`;
         select.addEventListener('click',()=>{selectLabel(label);centerLabel(label);});
-        const go=document.createElement('button'); go.className='go'; go.type='button'; go.textContent='Go'; go.disabled=state.localizing;go.title=state.localizing?'Wait for localization or press Stop':`Navigate to ${label.name}`; go.addEventListener('click',()=>goToLabel(label,go));
+        const go=document.createElement('button'); go.className='go'; go.type='button'; go.textContent='Go'; go.disabled=state.localizing||!selectedMapIsActive();go.title=state.localizing?'Wait for localization or press Stop':(!selectedMapIsActive()?'Start navigation with this displayed map first':`Navigate to ${label.name}`); go.addEventListener('click',()=>goToLabel(label,go));
         item.append(select,go); labelList.appendChild(item);
       }
     }
@@ -261,17 +322,17 @@ INDEX_HTML = r"""<!doctype html>
       const bytes=Uint8Array.from(atob(data.pixels),c=>c.charCodeAt(0)); state.mapPixels=bytes; const image=ctx.createImageData(data.width,data.height);
       for(let i=0;i<bytes.length;i++){const j=i*4;image.data[j]=bytes[i];image.data[j+1]=bytes[i];image.data[j+2]=bytes[i];image.data[j+3]=255;}
       canvas.width=data.width;canvas.height=data.height;poseCanvas.width=data.width;poseCanvas.height=data.height;state.mapImage=image;fitMap();syncSelection();renderList();updateSaveButton();setStatus(`${name}: ${data.width} × ${data.height}, ${state.labels.length} saved labels`,'success');
-      updatePoseDisplay();
+      applyNavigationStatus(state.navigation);
     }
     function applyZoom(){const width=`${canvas.width*state.zoom}px`,height=`${canvas.height*state.zoom}px`;canvas.style.width=width;canvas.style.height=height;poseCanvas.style.width=width;poseCanvas.style.height=height;draw();}
     function fitMap(){const pad=64,zx=Math.max(.01,(viewer.clientWidth-pad)/canvas.width),zy=Math.max(.01,(viewer.clientHeight-pad)/canvas.height);state.zoom=Math.max(.02,Math.min(3,Math.min(zx,zy)));applyZoom();}
-    async function saveLabels(){
-      if(!state.dirty)return{labels:state.labels}; state.saving=true;updateSaveButton();setStatus('Saving labels…');
+    async function saveLabels(force=false){
+      if(!state.dirty&&!force)return{labels:state.labels}; state.saving=true;updateSaveButton();document.getElementById('startNavBtn').disabled=true;setStatus('Saving labels…');
       try{const data=await fetchJson('/api/labels',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({map:state.mapName,labels:state.labels})});state.labels=data.labels||state.labels;state.dirty=false;if(!state.labels.some(l=>l.id===state.selectedId))state.selectedId=null;renderList();syncSelection();draw();setStatus(`Saved ${data.count} labels to ${data.file}`,'success');return data;}
-      catch(error){state.dirty=true;setStatus(`Save failed: ${error.message}`,'error');throw error;}finally{state.saving=false;updateSaveButton();}
+      catch(error){state.dirty=true;setStatus(`Save failed: ${error.message}`,'error');throw error;}finally{state.saving=false;updateSaveButton();applyNavigationStatus(state.navigation);}
     }
     async function goToLabel(label,button){
-      try{if(state.dirty)await saveLabels();const saved=state.labels.find(candidate=>candidate.id===label.id);if(!saved)throw new Error('The label was not found after saving.');const world=saved.world||worldFromPixel(saved.x,saved.y),coords=world?` (${Number(world.x).toFixed(2)}, ${Number(world.y).toFixed(2)})`:'';if(!confirm(`Send the robot to “${saved.name}”${coords}?`))return;
+      try{if(!selectedMapIsActive())throw new Error('Start navigation with the displayed map before using Go.');if(state.dirty)await saveLabels();const saved=state.labels.find(candidate=>candidate.id===label.id);if(!saved)throw new Error('The label was not found after saving.');const world=saved.world||worldFromPixel(saved.x,saved.y),coords=world?` (${Number(world.x).toFixed(2)}, ${Number(world.y).toFixed(2)})`:'';if(!confirm(`Send the robot to “${saved.name}”${coords}?`))return;
         const original=button.textContent;button.disabled=true;button.textContent='Sending…';setStatus(`Sending navigation command for ${saved.name}…`);
         try{const data=await fetchJson('/api/go',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({map:state.mapName,label_id:saved.id})});if(data.cancelled_by_stop)setStatus(`Navigation to ${data.name} was cancelled by Stop.`,'success');else setStatus(`Navigation command sent for ${data.name} on ${data.topic} (ROS domain ${data.ros_domain_id})`,'success');}finally{button.disabled=false;button.textContent=original;}}
       catch(error){setStatus(`Could not navigate: ${error.message}`,'error');}
@@ -280,17 +341,41 @@ INDEX_HTML = r"""<!doctype html>
       const button=document.getElementById('stopBtn'),original=button.textContent;button.disabled=true;button.textContent='Stopping…';setStatus('Sending emergency navigation stop…','error');
       try{const data=await fetchJson('/api/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(localizationUiTimer)clearTimeout(localizationUiTimer);localizationUiTimer=null;state.localizing=false;document.getElementById('localizeBtn').disabled=false;renderList();setStatus(`Stop command sent on ${data.topic} (ROS domain ${data.ros_domain_id})`,'success');}
       catch(error){setStatus(`Could not send stop command: ${error.message}`,'error');}
-      finally{button.disabled=false;button.textContent=original;}
+      finally{button.disabled=!state.navigation.ready;button.textContent=original;applyNavigationStatus(state.navigation);}
+    }
+    async function startNavigationStack(){
+      if(!state.mapName)return;
+      if(!confirm(`Start the QBot navigation stack with ${state.mapName}? Startup and build details will appear in the website terminal.`))return;
+      const button=document.getElementById('startNavBtn'),original=button.textContent;button.disabled=true;button.textContent='Starting…';
+      try{await saveLabels(true);const data=await fetchJson('/api/navigation/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({map:state.mapName})});applyNavigationStatus(data);setStatus(`Navigation startup requested for ${state.mapName}. Watch the terminal for details.`,'success');}
+      catch(error){setStatus(`Could not start navigation: ${error.message}`,'error');showToast(`Could not start navigation: ${error.message}`,'error');await refreshNavigationStatus();}
+      finally{button.textContent=original;applyNavigationStatus(state.navigation);}
+    }
+    async function stopNavigationStack(){
+      if(!confirm('Stop the entire QBot navigation stack?'))return;
+      const button=document.getElementById('stopNavBtn'),original=button.textContent;button.disabled=true;button.textContent='Stopping…';
+      try{const data=await fetchJson('/api/navigation/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});applyNavigationStatus(data);setStatus('Stopping the navigation stack. Shutdown details are in the terminal.');}
+      catch(error){setStatus(`Could not stop navigation: ${error.message}`,'error');showToast(`Could not stop navigation: ${error.message}`,'error');}
+      finally{button.textContent=original;await refreshNavigationStatus();}
+    }
+    async function rebuildNavigation(){
+      if(!confirm('Rebuild qbot_platform now? Build output will appear in the website terminal.'))return;
+      const button=document.getElementById('rebuildNavBtn'),original=button.textContent;button.disabled=true;button.textContent='Building…';
+      try{const data=await fetchJson('/api/navigation/rebuild',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});applyNavigationStatus(data);setStatus('Navigation rebuild started. Watch the terminal for details.','success');}
+      catch(error){setStatus(`Could not rebuild navigation: ${error.message}`,'error');showToast(`Could not rebuild navigation: ${error.message}`,'error');await refreshNavigationStatus();}
+      finally{button.textContent=original;applyNavigationStatus(state.navigation);}
     }
     async function localizeRobot(){
+      if(!selectedMapIsActive()){setStatus('Start navigation with the displayed map before localizing.','error');return;}
       if(!confirm('The robot will stop navigation and slowly rotate 360° to localize. Make sure it has clear space. Continue?'))return;
       const button=document.getElementById('localizeBtn'),original=button.textContent;button.disabled=true;button.textContent='Starting…';setStatus('Starting AMCL global localization…');
-      try{const data=await fetchJson('/api/localize',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(data.cancelled_by_stop){setStatus('Localization was cancelled by Stop.','success');}else{state.localizing=true;button.disabled=true;renderList();setStatus(`Localization started on ROS domain ${data.ros_domain_id}. Go is locked during the rotation; Stop remains available.`,'success');localizationUiTimer=setTimeout(()=>{state.localizing=false;button.disabled=false;localizationUiTimer=null;renderList();setStatus('Localization rotation finished. Verify that the AMCL pose matches the robot before using Go.','success');},23000);}}
+      try{const data=await fetchJson('/api/localize',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({map:state.mapName})});if(data.cancelled_by_stop){setStatus('Localization was cancelled by Stop.','success');}else{state.localizing=true;button.disabled=true;renderList();setStatus(`Localization started on ROS domain ${data.ros_domain_id}. Go is locked during the rotation; Stop remains available.`,'success');localizationUiTimer=setTimeout(()=>{state.localizing=false;button.disabled=!selectedMapIsActive();localizationUiTimer=null;renderList();setStatus('Localization rotation finished. Verify that the AMCL pose matches the robot before using Go.','success');},23000);}}
       catch(error){setStatus(`Could not start localization: ${error.message}`,'error');}
-      finally{if(!state.localizing)button.disabled=false;button.textContent=original;}
+      finally{if(!state.localizing)button.disabled=!selectedMapIsActive();button.textContent=original;}
     }
     function updatePoseDisplay(){
       const element=document.getElementById('poseStatus'),button=document.getElementById('savePoseBtn'),pose=state.robotPose;
+      if(!selectedMapIsActive()){element.className='pose-status';element.textContent=state.navigation.active_map&&state.navigation.active_map!==state.mapName?`QBot pose hidden: Nav2 is using ${state.navigation.active_map}`:'QBot pose: start navigation with this map to show AMCL';button.disabled=true;drawRobotPose();return;}
       if(!pose?.available){element.className='pose-status';element.textContent=`QBot pose: ${pose?.reason||'waiting for /amcl_pose…'}`;button.disabled=true;drawRobotPose();return;}
       const point=pixelFromWorld(Number(pose.world.x),Number(pose.world.y)),inside=point&&point.x>=0&&point.y>=0&&point.x<canvas.width&&point.y<canvas.height;
       const positionStd=Math.max(Number(pose.uncertainty?.x_std_dev||0),Number(pose.uncertainty?.y_std_dev||0));
@@ -304,6 +389,7 @@ INDEX_HTML = r"""<!doctype html>
     }
     async function saveInitialPose(){
       const pose=state.robotPose,button=document.getElementById('savePoseBtn');
+      if(!selectedMapIsActive()){setStatus('Start navigation with the displayed map before saving init_pose.','error');return;}
       if(!pose?.available||pose.stale){setStatus('A fresh /amcl_pose is required before saving init_pose.','error');return;}
       const point=pixelFromWorld(Number(pose.world.x),Number(pose.world.y));
       if(!point||point.x<0||point.y<0||point.x>=canvas.width||point.y>=canvas.height){setStatus('The live QBot pose is outside the selected map. Select the map Nav2 is using.','error');return;}
@@ -332,11 +418,14 @@ INDEX_HTML = r"""<!doctype html>
     document.getElementById('fitBtn').addEventListener('click',fitMap);document.getElementById('zoomInBtn').addEventListener('click',()=>{state.zoom=Math.min(8,state.zoom*1.25);applyZoom();});document.getElementById('zoomOutBtn').addEventListener('click',()=>{state.zoom=Math.max(.02,state.zoom/1.25);applyZoom();});
     document.getElementById('themeBtn').addEventListener('click',()=>{const theme=document.documentElement.dataset.theme==='dark'?'light':'dark';localStorage.setItem('qbot-map-labeler-theme',theme);applyTheme(theme);});
     document.getElementById('stopBtn').addEventListener('click',stopNavigation);
+    document.getElementById('startNavBtn').addEventListener('click',startNavigationStack);
+    document.getElementById('stopNavBtn').addEventListener('click',stopNavigationStack);
+    document.getElementById('rebuildNavBtn').addEventListener('click',rebuildNavigation);
     document.getElementById('localizeBtn').addEventListener('click',localizeRobot);
     document.getElementById('savePoseBtn').addEventListener('click',saveInitialPose);
     document.getElementById('exportBtn').addEventListener('click',()=>{draw();const link=document.createElement('a');link.href=canvas.toDataURL('image/png');link.download=`${state.mapName.replace(/\.[^.]+$/,'')}_annotated.png`;link.click();});
     mapSelect.addEventListener('change',()=>{if(state.dirty&&!confirm('Switch maps and discard unsaved label changes?')){mapSelect.value=state.mapName;return;}loadMap(mapSelect.value).catch(error=>setStatus(error.message,'error'));});
-    window.addEventListener('beforeunload',event=>{if(state.dirty){event.preventDefault();event.returnValue='';}});window.addEventListener('resize',()=>{if(state.mapImage)applyZoom();});loadMaps().then(refreshRobotPose).catch(error=>setStatus(error.message,'error'));setInterval(refreshRobotPose,1000);
+    window.addEventListener('beforeunload',event=>{if(state.dirty){event.preventDefault();event.returnValue='';}});window.addEventListener('resize',()=>{if(state.mapImage)applyZoom();});Promise.all([loadMaps(),refreshNavigationStatus()]).then(refreshRobotPose).catch(error=>setStatus(error.message,'error'));setInterval(refreshRobotPose,1000);setInterval(refreshNavigationStatus,1000);
   </script>
 </body>
 </html>
@@ -399,6 +488,24 @@ def map_geometry(map_path: Path) -> tuple[int, int, float, tuple[float, float, f
         raise ValueError(f"Invalid origin in {map_path.with_suffix('.yaml')}")
     width, height, _ = read_pgm(map_path)
     return width, height, resolution, tuple(float(value) for value in raw_origin[:3])
+
+
+def validate_navigation_map(map_path: Path) -> None:
+    yaml_path = map_path.with_suffix(".yaml")
+    if not yaml_path.exists():
+        raise ValueError(f"Map metadata not found: {yaml_path.name}")
+    metadata = parse_yaml(yaml_path)
+    image_value = str(metadata.get("image") or "").strip()
+    if not image_value:
+        raise ValueError(f"Map metadata has no image entry: {yaml_path.name}")
+    configured_image = Path(image_value)
+    if not configured_image.is_absolute():
+        configured_image = yaml_path.parent / configured_image
+    if configured_image.resolve() != map_path.resolve():
+        raise ValueError(
+            f"{yaml_path.name} references {configured_image.name}, not {map_path.name}"
+        )
+    map_geometry(map_path)
 
 
 def world_from_pixel(map_path: Path, pixel_x: float, pixel_y: float) -> tuple[float, float]:
@@ -542,6 +649,488 @@ def publish_label(label_name: str, topic: str, timeout: float, ros_domain_id: in
         raise RuntimeError(detail or f"ros2 topic pub exited with status {result.returncode}")
 
 
+class NavigationConflictError(RuntimeError):
+    """Raised when a navigation lifecycle operation cannot safely begin."""
+
+
+class NavigationManager:
+    """Build, start, monitor, and stop the navigation stack launched by this GUI."""
+
+    CONFLICTING_NODES = {
+        "/amcl",
+        "/behavior_server",
+        "/bt_navigator",
+        "/controller_server",
+        "/lifecycle_manager_localization",
+        "/lifecycle_manager_navigation",
+        "/map_server",
+        "/planner_server",
+        "/velocity_smoother",
+        "/waypoint_follower",
+        "/Lidar",
+        "/QBotPlatformDriver",
+    }
+    REQUIRED_READY_NODES = {
+        "/amcl",
+        "/bt_navigator",
+        "/controller_server",
+        "/planner_server",
+    }
+
+    def __init__(
+        self,
+        *,
+        repo_dir: Path = REPO_DIR,
+        navigation_setup: Path = NAVIGATION_SETUP,
+        run_script: Path = RUN_NAVIGATION_SCRIPT,
+        rebuild_script: Path = REBUILD_NAVIGATION_SCRIPT,
+        scan_filter_file: Path = SCAN_FILTER_FILE,
+        ros_domain_id: int = 63,
+        readiness_timeout: float = 120.0,
+        probe_interval: float = 1.0,
+        popen_factory=None,
+        run_factory=None,
+    ) -> None:
+        self.repo_dir = Path(repo_dir)
+        self.navigation_setup = Path(navigation_setup)
+        self.run_script = Path(run_script)
+        self.rebuild_script = Path(rebuild_script)
+        self.scan_filter_file = Path(scan_filter_file)
+        self.ros_domain_id = ros_domain_id
+        self.readiness_timeout = readiness_timeout
+        self.probe_interval = probe_interval
+        self.popen_factory = popen_factory or subprocess.Popen
+        self.run_factory = run_factory or subprocess.run
+        self.lock = threading.RLock()
+        self.state = "stopped"
+        self.active_map: str | None = None
+        self.message = "Navigation is stopped."
+        self.error = ""
+        self.process = None
+        self.worker: threading.Thread | None = None
+        self.stop_event = threading.Event()
+        self.operation_token = 0
+        self.last_exit_code: int | None = None
+
+    def _environment(self) -> dict[str, str]:
+        environment = os.environ.copy()
+        environment["ROS_DOMAIN_ID"] = str(self.ros_domain_id)
+        return environment
+
+    def snapshot(self) -> dict:
+        with self.lock:
+            process_alive = self.process is not None and self.process.poll() is None
+            return {
+                "state": self.state,
+                "active_map": self.active_map,
+                "ready": self.state == "ready" and process_alive,
+                "message": self.message,
+                "error": self.error or None,
+                "managed_process": process_alive,
+                "pid": self.process.pid if process_alive else None,
+                "last_exit_code": self.last_exit_code,
+                "ros_domain_id": self.ros_domain_id,
+            }
+
+    def _run_cli(self, command: list[str], *, strict: bool = False):
+        try:
+            result = self.run_factory(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=5.0,
+                env=self._environment(),
+            )
+        except FileNotFoundError as exc:
+            if strict:
+                raise RuntimeError(
+                    "ros2 was not found; launch the website with run_qbot_map_labeler.sh"
+                ) from exc
+            return None
+        except subprocess.TimeoutExpired:
+            return None
+        if result.returncode != 0:
+            if strict:
+                detail = (result.stderr or result.stdout).strip()
+                raise RuntimeError(detail or "Could not inspect the ROS graph")
+            return None
+        return result
+
+    def conflicting_nodes(self) -> list[str]:
+        result = self._run_cli(["ros2", "node", "list"], strict=True)
+        nodes = {line.strip() for line in result.stdout.splitlines() if line.strip()}
+        return sorted(nodes & self.CONFLICTING_NODES)
+
+    def navigation_ready(self) -> bool:
+        nodes_result = self._run_cli(["ros2", "node", "list"])
+        if nodes_result is None:
+            return False
+        nodes = {
+            line.strip() for line in nodes_result.stdout.splitlines() if line.strip()
+        }
+        if not self.REQUIRED_READY_NODES.issubset(nodes):
+            return False
+        for node in ("/amcl", "/bt_navigator"):
+            lifecycle = self._run_cli(["ros2", "lifecycle", "get", node])
+            if lifecycle is None or "active" not in lifecycle.stdout.casefold():
+                return False
+        actions = self._run_cli(["ros2", "action", "list"])
+        if actions is None:
+            return False
+        return "/navigate_to_pose" in {
+            line.strip() for line in actions.stdout.splitlines() if line.strip()
+        }
+
+    def _begin_operation(self, state: str, active_map: str | None, message: str) -> int:
+        with self.lock:
+            process_alive = self.process is not None and self.process.poll() is None
+            if self.state in {"building", "starting", "ready", "stopping"} or process_alive:
+                raise NavigationConflictError(
+                    f"Navigation manager is currently {self.state}; stop it before starting another operation"
+                )
+            self.operation_token += 1
+            token = self.operation_token
+            self.stop_event = threading.Event()
+            self.state = state
+            self.active_map = active_map
+            self.message = message
+            self.error = ""
+            self.last_exit_code = None
+            return token
+
+    def _set_state(
+        self,
+        token: int,
+        state: str,
+        message: str,
+        *,
+        error: str = "",
+        clear_active_map: bool = False,
+    ) -> bool:
+        with self.lock:
+            if token != self.operation_token:
+                return False
+            self.state = state
+            self.message = message
+            self.error = error
+            if clear_active_map:
+                self.active_map = None
+            return True
+
+    def _spawn(self, token: int, command: list[str]):
+        with self.lock:
+            if token != self.operation_token or self.stop_event.is_set():
+                raise RuntimeError("Navigation operation was stopped")
+        process = self.popen_factory(
+            command,
+            cwd=str(self.repo_dir),
+            env=self._environment(),
+            start_new_session=True,
+            stdout=None,
+            stderr=None,
+        )
+        with self.lock:
+            if token != self.operation_token or self.stop_event.is_set():
+                self._terminate_process_group(process)
+                raise RuntimeError("Navigation operation was stopped")
+            self.process = process
+        return process
+
+    def _clear_process(self, process) -> None:
+        with self.lock:
+            if self.process is process:
+                self.process = None
+
+    def _wait_for_process(self, process) -> int:
+        return int(process.wait())
+
+    def start(self, map_path: Path) -> dict:
+        map_path = Path(map_path).resolve()
+        if not map_path.exists() or map_path.suffix != ".pgm":
+            raise ValueError("Select an existing .pgm map before starting navigation")
+        validate_navigation_map(map_path)
+        labels_path = label_path_for(map_path)
+        if not labels_path.exists():
+            raise ValueError("Save the selected map's labels before starting navigation")
+        if not self.run_script.exists():
+            raise RuntimeError(f"Navigation script not found: {self.run_script}")
+        if not self.scan_filter_file.exists():
+            raise RuntimeError(f"Scan filter file not found: {self.scan_filter_file}")
+        conflicts = self.conflicting_nodes()
+        if conflicts:
+            raise NavigationConflictError(
+                "Navigation nodes are already running: " + ", ".join(conflicts)
+            )
+        needs_build = not self.navigation_setup.exists()
+        initial_state = "building" if needs_build else "starting"
+        initial_message = (
+            "Building navigation workspace; details are in the terminal."
+            if needs_build
+            else f"Starting navigation with {map_path.name}; details are in the terminal."
+        )
+        token = self._begin_operation(initial_state, map_path.name, initial_message)
+        worker = threading.Thread(
+            target=self._start_worker,
+            args=(token, map_path, needs_build),
+            name="qbot-navigation-start",
+            daemon=True,
+        )
+        with self.lock:
+            self.worker = worker
+        worker.start()
+        return self.snapshot()
+
+    def _start_worker(self, token: int, map_path: Path, needs_build: bool) -> None:
+        process = None
+        try:
+            if self.stop_event.is_set():
+                self._set_state(
+                    token,
+                    "stopped",
+                    "Navigation startup was stopped.",
+                    clear_active_map=True,
+                )
+                return
+            if needs_build:
+                if not self.rebuild_script.exists():
+                    raise RuntimeError(f"Rebuild script not found: {self.rebuild_script}")
+                process = self._spawn(token, [str(self.rebuild_script)])
+                return_code = self._wait_for_process(process)
+                self._clear_process(process)
+                process = None
+                if self.stop_event.is_set():
+                    self._set_state(
+                        token,
+                        "stopped",
+                        "Navigation startup was stopped.",
+                        clear_active_map=True,
+                    )
+                    return
+                if return_code != 0:
+                    raise RuntimeError(
+                        f"Navigation build failed with status {return_code}; check the terminal"
+                    )
+                if not self.navigation_setup.exists():
+                    raise RuntimeError(
+                        "Build finished but robot_navigation/install/setup.bash was not created"
+                    )
+                self._set_state(
+                    token,
+                    "starting",
+                    f"Starting navigation with {map_path.name}; details are in the terminal.",
+                )
+
+            if self.stop_event.is_set():
+                self._set_state(
+                    token,
+                    "stopped",
+                    "Navigation startup was stopped.",
+                    clear_active_map=True,
+                )
+                return
+
+            command = [
+                str(self.run_script),
+                "--map",
+                str(map_path.with_suffix(".yaml")),
+                "--labels",
+                str(label_path_for(map_path)),
+                "--scan-filter-file",
+                str(self.scan_filter_file),
+            ]
+            process = self._spawn(token, command)
+            deadline = time.monotonic() + self.readiness_timeout
+            while time.monotonic() < deadline:
+                return_code = process.poll()
+                if return_code is not None:
+                    self.last_exit_code = int(return_code)
+                    raise RuntimeError(
+                        f"Navigation exited with status {return_code} before becoming ready; check the terminal"
+                    )
+                if self.stop_event.is_set():
+                    self._terminate_process_group(process)
+                    self._clear_process(process)
+                    self._set_state(
+                        token,
+                        "stopped",
+                        "Navigation was stopped.",
+                        clear_active_map=True,
+                    )
+                    return
+                if self.navigation_ready():
+                    self._set_state(
+                        token,
+                        "ready",
+                        f"Navigation is ready with {map_path.name}.",
+                    )
+                    return_code = self._wait_for_process(process)
+                    self.last_exit_code = return_code
+                    self._clear_process(process)
+                    if self.stop_event.is_set():
+                        self._set_state(
+                            token,
+                            "stopped",
+                            "Navigation was stopped.",
+                            clear_active_map=True,
+                        )
+                    else:
+                        raise RuntimeError(
+                            f"Navigation exited unexpectedly with status {return_code}; check the terminal"
+                        )
+                    return
+                time.sleep(self.probe_interval)
+            raise RuntimeError(
+                f"Navigation did not become ready within {self.readiness_timeout:g} seconds; check the terminal"
+            )
+        except Exception as exc:
+            if process is not None and process.poll() is None:
+                self._terminate_process_group(process)
+            if process is not None:
+                self._clear_process(process)
+            if self.stop_event.is_set():
+                self._set_state(
+                    token,
+                    "stopped",
+                    "Navigation was stopped.",
+                    clear_active_map=True,
+                )
+            else:
+                self._set_state(
+                    token,
+                    "error",
+                    str(exc),
+                    error=str(exc),
+                    clear_active_map=True,
+                )
+        finally:
+            with self.lock:
+                if token == self.operation_token:
+                    self.worker = None
+
+    def rebuild(self) -> dict:
+        if not self.rebuild_script.exists():
+            raise RuntimeError(f"Rebuild script not found: {self.rebuild_script}")
+        conflicts = self.conflicting_nodes()
+        if conflicts:
+            raise NavigationConflictError(
+                "Stop the running navigation stack before rebuilding: "
+                + ", ".join(conflicts)
+            )
+        token = self._begin_operation(
+            "building",
+            None,
+            "Rebuilding navigation workspace; details are in the terminal.",
+        )
+        worker = threading.Thread(
+            target=self._rebuild_worker,
+            args=(token,),
+            name="qbot-navigation-rebuild",
+            daemon=True,
+        )
+        with self.lock:
+            self.worker = worker
+        worker.start()
+        return self.snapshot()
+
+    def _rebuild_worker(self, token: int) -> None:
+        process = None
+        try:
+            if self.stop_event.is_set():
+                self._set_state(token, "stopped", "Build was stopped.")
+                return
+            process = self._spawn(token, [str(self.rebuild_script)])
+            return_code = self._wait_for_process(process)
+            self.last_exit_code = return_code
+            self._clear_process(process)
+            if self.stop_event.is_set():
+                self._set_state(token, "stopped", "Build was stopped.")
+            elif return_code == 0:
+                self._set_state(token, "stopped", "Build completed successfully.")
+            else:
+                raise RuntimeError(
+                    f"Navigation build failed with status {return_code}; check the terminal"
+                )
+        except Exception as exc:
+            if process is not None and process.poll() is None:
+                self._terminate_process_group(process)
+            if process is not None:
+                self._clear_process(process)
+            if self.stop_event.is_set():
+                self._set_state(token, "stopped", "Build was stopped.")
+            else:
+                self._set_state(token, "error", str(exc), error=str(exc))
+        finally:
+            with self.lock:
+                if token == self.operation_token:
+                    self.worker = None
+
+    def stop(self) -> dict:
+        with self.lock:
+            if self.state in {"stopped", "error"} and (
+                self.process is None or self.process.poll() is not None
+            ):
+                self.state = "stopped"
+                self.active_map = None
+                self.error = ""
+                self.message = "Navigation is already stopped."
+                return self.snapshot()
+            token = self.operation_token
+            self.stop_event.set()
+            self.state = "stopping"
+            self.message = "Stopping navigation; shutdown details are in the terminal."
+            process = self.process
+        thread = threading.Thread(
+            target=self._stop_worker,
+            args=(token, process),
+            name="qbot-navigation-stop",
+            daemon=True,
+        )
+        thread.start()
+        return self.snapshot()
+
+    def _stop_worker(self, token: int, process) -> None:
+        if process is not None:
+            self._terminate_process_group(process)
+            self._clear_process(process)
+        self._set_state(
+            token,
+            "stopped",
+            "Navigation was stopped.",
+            clear_active_map=True,
+        )
+
+    @staticmethod
+    def _terminate_process_group(process) -> None:
+        if process.poll() is not None:
+            return
+        try:
+            process_group = os.getpgid(process.pid)
+        except (ProcessLookupError, OSError):
+            return
+        for sig, timeout in (
+            (signal.SIGINT, 15.0),
+            (signal.SIGTERM, 5.0),
+            (signal.SIGKILL, 2.0),
+        ):
+            try:
+                os.killpg(process_group, sig)
+            except ProcessLookupError:
+                return
+            try:
+                process.wait(timeout=timeout)
+                return
+            except subprocess.TimeoutExpired:
+                continue
+
+    def shutdown(self) -> None:
+        self.stop()
+        with self.lock:
+            worker = self.worker
+        if worker is not None and worker is not threading.current_thread():
+            worker.join(timeout=24.0)
+
+
 class RobotPoseMonitor:
     """Keep the latest AMCL pose available to the HTTP server without polling ros2 CLI."""
 
@@ -664,6 +1253,7 @@ class Handler(BaseHTTPRequestHandler):
         body = json.dumps(data, indent=2).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -688,6 +1278,23 @@ class Handler(BaseHTTPRequestHandler):
             raise FileNotFoundError("Map not found")
         return map_path
 
+    def navigation_manager(self) -> NavigationManager | None:
+        return getattr(self.server, "navigation_manager", None)
+
+    def require_navigation_map(self, map_name: str) -> None:
+        manager = self.navigation_manager()
+        if manager is None:
+            return
+        status = manager.snapshot()
+        if not status["ready"]:
+            raise NavigationConflictError(
+                "Navigation is not ready; start it from the website first"
+            )
+        if status["active_map"] != map_name:
+            raise NavigationConflictError(
+                f"Nav2 is using {status['active_map']}, not {map_name}; stop navigation and start it with the selected map"
+            )
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         try:
@@ -711,6 +1318,22 @@ class Handler(BaseHTTPRequestHandler):
                     )
                 else:
                     self.write_json(monitor.snapshot())
+            elif parsed.path == "/api/navigation/status":
+                manager = self.navigation_manager()
+                if manager is None:
+                    self.write_json(
+                        {
+                            "state": "error",
+                            "active_map": None,
+                            "ready": False,
+                            "message": "Navigation manager is not configured",
+                            "error": "Navigation manager is not configured",
+                            "managed_process": False,
+                        },
+                        HTTPStatus.SERVICE_UNAVAILABLE,
+                    )
+                else:
+                    self.write_json(manager.snapshot())
             else:
                 self.write_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
         except FileNotFoundError as exc:
@@ -728,6 +1351,7 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/api/go":
                 data = self.read_json_body()
                 map_path = self.resolve_map(str(data.get("map", "")))
+                self.require_navigation_map(map_path.name)
                 if not label_path_for(map_path).exists():
                     self.write_json({"error": "Save the labels before navigating"}, HTTPStatus.CONFLICT)
                     return
@@ -786,7 +1410,9 @@ class Handler(BaseHTTPRequestHandler):
                     }
                 )
             elif self.path == "/api/localize":
-                self.read_json_body()
+                data = self.read_json_body()
+                map_path = self.resolve_map(str(data.get("map", "")))
+                self.require_navigation_map(map_path.name)
                 topic = str(getattr(self.server, "label_topic", "/label"))
                 ros_domain_id = int(getattr(self.server, "ros_domain_id", 63))
                 with self.server.navigation_lock:
@@ -814,10 +1440,33 @@ class Handler(BaseHTTPRequestHandler):
                         "cancelled_by_stop": cancelled_by_stop,
                     }
                 )
+            elif self.path == "/api/navigation/start":
+                data = self.read_json_body()
+                map_path = self.resolve_map(str(data.get("map", "")))
+                if not label_path_for(map_path).exists():
+                    write_labels(map_path, read_labels(map_path))
+                manager = self.navigation_manager()
+                if manager is None:
+                    raise RuntimeError("Navigation manager is not configured")
+                self.write_json(manager.start(map_path), HTTPStatus.ACCEPTED)
+            elif self.path == "/api/navigation/stop":
+                self.read_json_body()
+                manager = self.navigation_manager()
+                if manager is None:
+                    raise RuntimeError("Navigation manager is not configured")
+                self.write_json(manager.stop(), HTTPStatus.ACCEPTED)
+            elif self.path == "/api/navigation/rebuild":
+                self.read_json_body()
+                manager = self.navigation_manager()
+                if manager is None:
+                    raise RuntimeError("Navigation manager is not configured")
+                self.write_json(manager.rebuild(), HTTPStatus.ACCEPTED)
             else:
                 self.write_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
         except FileNotFoundError as exc:
             self.write_json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+        except NavigationConflictError as exc:
+            self.write_json({"error": str(exc)}, HTTPStatus.CONFLICT)
         except RuntimeError as exc:
             self.write_json({"error": str(exc)}, HTTPStatus.SERVICE_UNAVAILABLE)
         except Exception as exc:
@@ -832,6 +1481,12 @@ def main() -> None:
     parser.add_argument("--pose-topic", default="/amcl_pose", help="AMCL pose topic shown on the map")
     parser.add_argument("--go-timeout", type=float, default=10, help="Seconds to wait for the ROS label publication")
     parser.add_argument(
+        "--navigation-timeout",
+        type=float,
+        default=120,
+        help="Seconds to wait for AMCL and Nav2 to become ready",
+    )
+    parser.add_argument(
         "--ros-domain-id",
         type=int,
         default=63,
@@ -840,6 +1495,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.go_timeout <= 0:
         parser.error("--go-timeout must be positive")
+    if args.navigation_timeout <= 0:
+        parser.error("--navigation-timeout must be positive")
     if not 0 <= args.ros_domain_id <= 232:
         parser.error("--ros-domain-id must be between 0 and 232")
     server = ThreadingHTTPServer((args.host, args.port), Handler)
@@ -850,6 +1507,11 @@ def main() -> None:
     pose_monitor = RobotPoseMonitor(args.pose_topic)
     pose_monitor.start(args.ros_domain_id)
     server.pose_monitor = pose_monitor
+    navigation_manager = NavigationManager(
+        ros_domain_id=args.ros_domain_id,
+        readiness_timeout=args.navigation_timeout,
+    )
+    server.navigation_manager = navigation_manager
     print(f"Map label GUI: http://{args.host}:{args.port}")
     print(f"Serving maps from: {MAPS_DIR}")
     print(f"Go publishes labels on: {args.label_topic}")
@@ -863,6 +1525,7 @@ def main() -> None:
         print("\nStopping map label GUI.")
     finally:
         server.server_close()
+        navigation_manager.shutdown()
         pose_monitor.stop()
 
 

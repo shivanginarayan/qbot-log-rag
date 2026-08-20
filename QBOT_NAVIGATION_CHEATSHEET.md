@@ -3,35 +3,25 @@
 Commands below assume the repository is located at `~/qbot-log-rag` and ROS
 uses domain ID `63`.
 
-## Convenience Scripts
+## Start the Website and Navigation
 
-Rebuild after changing package source, configuration, or launch files:
-
-```bash
-./rebuild_qbot_navigation.sh
-```
-
-Prepare the terminal that will run navigation. Environment setup scripts must
-be **sourced** so their exported variables remain in the current terminal:
-
-```bash
-source ./setup_qbot_navigation_terminal.sh
-./run_qbot_navigation.sh
-```
-
-Prepare any additional ROS command/diagnostic terminal:
-
-```bash
-source ./setup_qbot_terminal.sh
-```
-
-Start the browser map labeler in its own terminal:
+The normal operator workflow needs one terminal command:
 
 ```bash
 ./run_qbot_map_labeler.sh
 ```
 
-These scripts use `ROS_DOMAIN_ID=63`.
+Open `http://ROBOT_IP:8765`, choose a map, and press **Start Navigation**. The
+website saves the selected map's labels and starts Nav2 with its matching YAML
+and JSON. Build and ROS launch output stays in this terminal; the page shows a
+ready notification when AMCL and Nav2 are active.
+
+Use **Stop Navigation** before starting a different map. Merely changing the
+displayed map does not reload Nav2; while the maps differ, the page disables
+Go, Localize, and the live pose marker and shows both map names.
+
+Use **Rebuild** after changing package source, configuration, or launch files.
+All website-managed commands use `ROS_DOMAIN_ID=63`.
 
 ## 1. Build After Changing Source, Launch, or Configuration Files
 
@@ -43,20 +33,15 @@ colcon build --packages-select qbot_platform
 source install/setup.bash
 ```
 
-Rebuild after changing anything under `robot_navigation/src/qbot_platform`,
-including `qbot_platform_slam_and_nav.yaml`.
+This is the terminal equivalent of the website's **Rebuild** button. Rebuild
+after changing anything under `robot_navigation/src/qbot_platform`, including
+`qbot_platform_slam_and_nav.yaml`.
 
 ## 2. Select the Map and Labels
 
-Check these lines in `run_qbot_navigation.sh` before launching:
-
-```bash
-MAP_DIR="$NAV_DIR/maps"
-MAP="$MAP_DIR/lab_map_new.yaml"
-LABELS="$MAP_DIR/lab_map_new_labels.json"
-```
-
-The map YAML, PGM, and labels JSON must describe the same map.
+Choose the PGM in the website map selector. **Start Navigation** automatically
+passes its matching YAML and `<map_stem>_labels.json` to Nav2; there is no
+hardcoded map in `run_qbot_navigation.sh`.
 
 ## 3. Localize AMCL Before Navigation
 
@@ -102,20 +87,28 @@ Rebuild after changing these parameters.
 
 ```bash
 cd ~/qbot-log-rag
-./run_qbot_navigation.sh
+./run_qbot_map_labeler.sh
 ```
 
-Run this by itself. Do not simultaneously run `start_qbot.sh joystick`, the
-follower, or `ros2 run qbot_platform command`; those can start duplicate
-drivers or compete with Nav2 on `/cmd_vel`.
+Select the desired map and press **Start Navigation**. Do not simultaneously
+run `start_qbot.sh joystick`, the follower, or `ros2 run qbot_platform command`;
+those can start duplicate drivers or compete with Nav2 on `/cmd_vel`.
 
-Stop the navigation stack with `Ctrl+C` in this terminal.
+Use **Stop Navigation** to stop the whole stack. Closing the website process
+with Ctrl+C also stops the navigation stack that website launched.
+
+For manual troubleshooting only, the shell entrypoint now requires a map:
+
+```bash
+./run_qbot_navigation.sh \
+  --map robot_navigation/maps/MAP_NAME.yaml
+```
 
 ## 5. Prepare Every Additional Terminal
 
 ```bash
 cd ~/qbot-log-rag
-export ROS_DOMAIN_ID=57
+export ROS_DOMAIN_ID=63
 source /opt/ros/humble/setup.bash
 source "$HOME/ros2/install/setup.bash"
 source "$PWD/robot_navigation/install/setup.bash"
@@ -185,12 +178,8 @@ slow 360-degree rotation without blind translational movement.
 On the robot:
 
 ```bash
-cd ~/qbot-log-rag/robot_navigation
-export ROS_DOMAIN_ID=57
-source /opt/ros/humble/setup.bash
-source "$HOME/ros2/install/setup.bash"
-source install/setup.bash
-python3 tools/map_label_gui.py --host 0.0.0.0 --port 8765
+cd ~/qbot-log-rag
+./run_qbot_map_labeler.sh
 ```
 
 Find the robot's IP if needed:
@@ -205,9 +194,10 @@ On a laptop connected to the same network, open:
 http://ROBOT_IP:8765
 ```
 
-Select `lab_map_new.pgm`, click a known white/free location, enter its name, and
-press **Save Labels**. The **Go** button saves any pending changes, asks for
-confirmation, and publishes the selected name on `/label`.
+Select a map, click a known white/free location, enter its name, and press
+**Save Labels**. Press **Start Navigation** and wait for the ready notification.
+The **Go** button saves pending changes, asks for confirmation, and publishes
+the selected name on `/label`.
 
 When `/amcl_pose` is available, an orange **QBot** arrow shows AMCL's live
 position and heading on the selected map. The dashed circle represents the
@@ -229,9 +219,9 @@ ros2 topic pub --once /label std_msgs/msg/String \
   "{data: '__stop_navigation__'}"
 ```
 
-The navigation stack must already be running for **Go** to work. The label
-listener reloads the JSON for every request, so newly saved labels do not
-require a Nav2 restart.
+The website requires its navigation status to be ready on the displayed map
+before **Go** works. The label listener reloads the JSON for every request, so
+newly saved labels do not require a Nav2 restart.
 
 ## 9. Convert a PGM Pixel to Map Coordinates
 
@@ -330,7 +320,7 @@ an exact floating-point coordinate and may eventually abort.
 RViz requires a graphical display. On a graphical ROS machine:
 
 ```bash
-export ROS_DOMAIN_ID=57
+export ROS_DOMAIN_ID=63
 rviz2
 ```
 
@@ -364,7 +354,7 @@ Goal aborted                 -> planning, localization, progress, or costmap iss
 
 Also verify that:
 
-- `run_qbot_navigation.sh` selected the intended map and labels.
+- The website's active Nav2 map matches the displayed map.
 - AMCL is active and localized on that map.
 - The label lies in known free space, not unknown or occupied space.
 - The joystick and follower are stopped.

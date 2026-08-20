@@ -7,7 +7,7 @@ from launch.actions import IncludeLaunchDescription
 from launch.actions import TimerAction
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
@@ -20,8 +20,9 @@ def generate_launch_description():
     qbot_share = get_package_share_directory("qbot_platform")
     realsense_share = get_package_share_directory("realsense2_camera")
 
-    maps_dir = "/home/nvidia/857_Final_Project_Code/maps"
-    map_name = LaunchConfiguration("map_name")
+    navigation_root = os.path.abspath(
+        os.path.join(qbot_share, "..", "..", "..", "..")
+    )
     map_yaml = LaunchConfiguration("map")
     labels_file = LaunchConfiguration("labels_file")
     use_breadcrumb_return = LaunchConfiguration("use_breadcrumb_return")
@@ -29,10 +30,6 @@ def generate_launch_description():
     scan_filter_file = LaunchConfiguration("scan_filter_file")
     raw_scan_topic = LaunchConfiguration("raw_scan_topic")
     filtered_scan_topic = LaunchConfiguration("filtered_scan_topic")
-    default_map = PythonExpression(["'", maps_dir, "/' + '", map_name, "' + '.yaml'"])
-    default_labels_file = PythonExpression([
-        "'", maps_dir, "/' + '", map_name, "' + '_labels.json'"
-    ])
     milton_start_delay = LaunchConfiguration("milton_start_delay")
     fullscreen = LaunchConfiguration("fullscreen")
     show_preview = LaunchConfiguration("show_preview")
@@ -54,20 +51,13 @@ def generate_launch_description():
     web_stream_port = LaunchConfiguration("web_stream_port")
     idle_search_delay_sec = LaunchConfiguration("idle_search_delay_sec")
 
-    map_name_arg = DeclareLaunchArgument(
-        "map_name",
-        default_value="lab_map_new",
-        description="Base map name used to derive maps/<name>.yaml and maps/<name>_labels.json.",
-    )
     map_arg = DeclareLaunchArgument(
         "map",
-        default_value=default_map,
-        description="Full path to the map yaml used by Nav2 localization.",
+        description="Required full path to the map YAML used by Nav2 localization.",
     )
     labels_file_arg = DeclareLaunchArgument(
         "labels_file",
-        default_value=default_labels_file,
-        description="Full path to the map labels JSON used by label navigation.",
+        description="Required full path to the matching map labels JSON.",
     )
     use_breadcrumb_return_arg = DeclareLaunchArgument(
         "use_breadcrumb_return",
@@ -81,7 +71,11 @@ def generate_launch_description():
     )
     scan_filter_file_arg = DeclareLaunchArgument(
         "scan_filter_file",
-        default_value="/home/nvidia/857_Final_Project_Code/filters/scan_wedge_filter.json",
+        default_value=os.path.join(
+            navigation_root,
+            "filters",
+            "scan_wedge_filter.json",
+        ),
         description="JSON/YAML wedge filter file used by scan_wedge_filter.py.",
     )
     raw_scan_topic_arg = DeclareLaunchArgument(
@@ -204,7 +198,6 @@ def generate_launch_description():
             )
         ),
         launch_arguments={
-            "map_name": map_name,
             "map": map_yaml,
             "labels_file": labels_file,
             "use_breadcrumb_return": use_breadcrumb_return,
@@ -334,7 +327,6 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
-            map_name_arg,
             map_arg,
             labels_file_arg,
             use_breadcrumb_return_arg,

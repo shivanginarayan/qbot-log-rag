@@ -20,15 +20,13 @@ if [ ! -f "$LABELER_QBOT_SETUP" ]; then
     exit 1
 fi
 
-if [ ! -f "$LABELER_NAV_DIR/install/setup.bash" ]; then
-    echo "ERROR: Navigation workspace is not built. Run:"
-    echo "  ./rebuild_qbot_navigation.sh"
-    exit 1
-fi
-
 source /opt/ros/humble/setup.bash
 source "$LABELER_QBOT_SETUP"
-source "$LABELER_NAV_DIR/install/setup.bash"
+if [ -f "$LABELER_NAV_DIR/install/setup.bash" ]; then
+    source "$LABELER_NAV_DIR/install/setup.bash"
+else
+    echo "Navigation workspace is not built yet. Use Start Navigation or Rebuild in the website."
+fi
 
 echo "Starting QBot map labeler on ROS domain $ROS_DOMAIN_ID..."
 echo "Open: http://ROBOT_IP:$LABELER_PORT"

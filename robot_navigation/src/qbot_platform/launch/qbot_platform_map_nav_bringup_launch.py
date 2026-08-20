@@ -15,8 +15,9 @@ def generate_launch_description():
     package_dir = get_package_share_directory("qbot_platform")
     nav2_dir = get_package_share_directory("nav2_bringup")
 
-    maps_dir = "/home/nvidia/ENGR857_Narayan_Shivangi/project/navigation/maps/study_area_v1"
-    map_name = LaunchConfiguration("map_name")
+    navigation_root = os.path.abspath(
+        os.path.join(package_dir, "..", "..", "..", "..")
+    )
     labels_file = LaunchConfiguration("labels_file")
     use_breadcrumb_return = LaunchConfiguration("use_breadcrumb_return")
     use_scan_filter = LaunchConfiguration("use_scan_filter")
@@ -32,10 +33,6 @@ def generate_launch_description():
         raw_scan_topic,
         "'",
     ])
-    default_map = PythonExpression(["'", maps_dir, "/' + '", map_name, "' + '.yaml'"])
-    default_labels_file = PythonExpression([
-        "'", maps_dir, "/' + '", map_name, "' + '_labels.json'"
-    ])
     params_file = os.path.join(package_dir, "config", "qbot_platform_slam_and_nav.yaml")
     configured_params = RewrittenYaml(
         source_file=params_file,
@@ -47,9 +44,14 @@ def generate_launch_description():
         convert_types=True,
     )
 
-    map_name_arg = DeclareLaunchArgument("map_name", default_value="lab_map_new")
-    map_arg = DeclareLaunchArgument("map", default_value=default_map)
-    labels_file_arg = DeclareLaunchArgument("labels_file", default_value=default_labels_file)
+    map_arg = DeclareLaunchArgument(
+        "map",
+        description="Required full path to the map YAML used by Nav2 localization.",
+    )
+    labels_file_arg = DeclareLaunchArgument(
+        "labels_file",
+        description="Required full path to the matching labels JSON.",
+    )
     use_breadcrumb_return_arg = DeclareLaunchArgument(
         "use_breadcrumb_return",
         default_value="true",
@@ -62,7 +64,11 @@ def generate_launch_description():
     )
     scan_filter_file_arg = DeclareLaunchArgument(
         "scan_filter_file",
-        default_value="/home/nvidia/ENGR857_Narayan_Shivangi/project/navigation/filters/scan_wedge_filter.json",
+        default_value=os.path.join(
+            navigation_root,
+            "filters",
+            "scan_wedge_filter.json",
+        ),
         description="JSON/YAML wedge filter file used by scan_wedge_filter.py.",
     )
     raw_scan_topic_arg = DeclareLaunchArgument(
@@ -152,7 +158,6 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
-            map_name_arg,
             map_arg,
             labels_file_arg,
             use_breadcrumb_return_arg,
