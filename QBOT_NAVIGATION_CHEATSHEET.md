@@ -11,6 +11,13 @@ The normal operator workflow needs one terminal command:
 ./run_qbot_map_labeler.sh
 ```
 
+Adaptive goal tolerance is enabled by default. To start the same website with
+the original fixed `0.25 m` Nav2 tolerance instead:
+
+```bash
+./run_qbot_map_labeler.sh --fixed-goal-tolerance
+```
+
 Open `http://ROBOT_IP:8765`, choose a map, and press **Start Navigation**. The
 website saves the selected map's labels and starts Nav2 with its matching YAML
 and JSON. Build and ROS launch output stays in this terminal; the page shows a
@@ -22,6 +29,45 @@ Go, Localize, and the live pose marker and shows both map names.
 
 Use **Rebuild** after changing package source, configuration, or launch files.
 All website-managed commands use `ROS_DOMAIN_ID=63`.
+
+## Map a New Area from the Website
+
+Stop Navigation first, then press **New Map**. Enter a unique filename using
+letters, numbers, underscores, or hyphens. The website builds when necessary
+and starts the physical driver, filtered LiDAR, wheel odometry, Cartographer,
+and the QBot gamepad node.
+
+The map canvas switches to a downsampled live `/map` preview. The preview is
+limited to 1200 pixels on its longest edge and updates about once per second;
+the saved map still uses the full `0.01 m/pixel` occupancy grid.
+
+Drive with the physical controller:
+
+```text
+Hold LB       enable motion
+RT            forward
+Left stick    turn
+A + RT        reverse
+Release LB    stop motion
+```
+
+When the area is complete, release LB and press **Finish & Save**. The website
+saves and validates `<name>.pgm` and `<name>.yaml`, creates
+`<name>_labels.json`, stops mapping, refreshes the selector, and opens the new
+map for labels. Existing map files are never overwritten.
+
+Press **Cancel Mapping** to stop Cartographer without saving. The red **Stop
+robot** button is navigation-only during manual mapping; release the gamepad's
+LB deadman to stop manual motion.
+
+For terminal troubleshooting, the equivalent managed mapping entrypoint is:
+
+```bash
+./run_qbot_mapping.sh \
+  --scan-filter-file robot_navigation/filters/scan_wedge_filter.json \
+  --resolution 0.01 \
+  --publish-period 1.0
+```
 
 ## 1. Build After Changing Source, Launch, or Configuration Files
 
@@ -171,7 +217,9 @@ After calling it, slowly rotate and move the robot in a safe, distinctive area.
 Do not send a navigation goal until AMCL has converged.
 
 The browser's **Localize** button performs the global-localization reset and a
-slow 360-degree rotation without blind translational movement.
+slow 360-degree rotation without blind translational movement. Its spin command
+is sent to `/cmd_vel_nav`, allowing Nav2's velocity smoother to forward it to
+the QBot driver on `/cmd_vel` without competing publishers.
 
 ## 8. Open the Browser Map Labeler
 
@@ -198,6 +246,11 @@ Select a map, click a known white/free location, enter its name, and press
 **Save Labels**. Press **Start Navigation** and wait for the ready notification.
 The **Go** button saves pending changes, asks for confirmation, and publishes
 the selected name on `/label`.
+
+While a goal is active, its sidebar row displays a pulsing **Navigating** badge
+and all Go buttons are locked. The page shows a notification when the goal
+succeeds, is canceled, is rejected, or aborts. These results come from
+`/robot/navigation_status`.
 
 When `/amcl_pose` is available, an orange **QBot** arrow shows AMCL's live
 position and heading on the selected map. The dashed circle represents the
@@ -302,18 +355,44 @@ Common action status values:
 
 ## 12. Goal Accuracy
 
-In `qbot_platform_slam_and_nav.yaml`, a practical starting point is:
+The YAML keeps Nav2's original fixed fallback:
 
 ```yaml
 general_goal_checker:
   plugin: "nav2_controller::SimpleGoalChecker"
   stateful: false
-  xy_goal_tolerance: 0.10
-  yaw_goal_tolerance: 0.12
+  xy_goal_tolerance: 0.25
+  yaw_goal_tolerance: 0.25
 ```
 
-Do not set `xy_goal_tolerance` to `0.0`; a physical robot is unlikely to reach
-an exact floating-point coordinate and may eventually abort.
+By default, `adaptive_goal_tolerance.py` watches `/amcl_pose` covariance. Three
+consecutive position standard-deviation readings at or below `0.08 m` tighten
+the XY tolerance to `0.10 m`. It returns to `0.25 m` above `0.12 m`, or when
+the AMCL pose is missing, invalid, or stale for more than two seconds. The yaw
+tolerance stays fixed at `0.25 rad`.
+
+Check the live controller value:
+
+```bash
+ros2 param get /controller_server general_goal_checker.xy_goal_tolerance
+```
+
+Disable adaptation while navigation is running and restore `0.25 m`:
+
+```bash
+ros2 param set /adaptive_goal_tolerance enabled false
+```
+
+If the adaptive node is unavailable, restore the controller directly:
+
+```bash
+ros2 param set /controller_server general_goal_checker.xy_goal_tolerance 0.25
+```
+
+Re-enable adaptation with `enabled true`; it will require three new
+high-confidence readings before selecting `0.10 m`. Low covariance does not
+prove that AMCL chose the correct physical location, so still verify that the
+live pose and lidar alignment match the map.
 
 ## 13. RViz
 

@@ -19,6 +19,9 @@ def generate_launch_description():
         os.path.join(package_dir, "..", "..", "..", "..")
     )
     labels_file = LaunchConfiguration("labels_file")
+    use_adaptive_goal_tolerance = LaunchConfiguration(
+        "use_adaptive_goal_tolerance"
+    )
     use_breadcrumb_return = LaunchConfiguration("use_breadcrumb_return")
     use_scan_filter = LaunchConfiguration("use_scan_filter")
     scan_filter_file = LaunchConfiguration("scan_filter_file")
@@ -51,6 +54,14 @@ def generate_launch_description():
     labels_file_arg = DeclareLaunchArgument(
         "labels_file",
         description="Required full path to the matching labels JSON.",
+    )
+    use_adaptive_goal_tolerance_arg = DeclareLaunchArgument(
+        "use_adaptive_goal_tolerance",
+        default_value="true",
+        description=(
+            "Adjust Nav2 XY goal tolerance between 0.10 m and 0.25 m from "
+            "AMCL covariance. Disable to retain the fixed YAML tolerance."
+        ),
     )
     use_breadcrumb_return_arg = DeclareLaunchArgument(
         "use_breadcrumb_return",
@@ -145,7 +156,21 @@ def generate_launch_description():
         executable="go_to_label.py",
         name="go_to_label",
         output="screen",
-        arguments=["--labels-file", labels_file],
+        arguments=[
+            "--labels-file",
+            labels_file,
+            "--cmd-vel-topic",
+            "/cmd_vel_nav",
+        ],
+    )
+
+    adaptive_goal_tolerance_node = Node(
+        condition=IfCondition(use_adaptive_goal_tolerance),
+        package="qbot_platform",
+        executable="adaptive_goal_tolerance.py",
+        name="adaptive_goal_tolerance",
+        output="screen",
+        parameters=[configured_params],
     )
 
     breadcrumb_return_node = Node(
@@ -160,6 +185,7 @@ def generate_launch_description():
         [
             map_arg,
             labels_file_arg,
+            use_adaptive_goal_tolerance_arg,
             use_breadcrumb_return_arg,
             use_scan_filter_arg,
             scan_filter_file_arg,
@@ -171,6 +197,7 @@ def generate_launch_description():
             scan_filter_node,
             localization_launch,
             navigation_launch,
+            adaptive_goal_tolerance_node,
             go_to_label_node,
             breadcrumb_return_node,
         ]

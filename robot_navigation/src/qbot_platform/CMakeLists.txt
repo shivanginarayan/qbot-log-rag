@@ -52,6 +52,7 @@ install(DIRECTORY launch
 )
 
 install(PROGRAMS
+  scripts/adaptive_goal_tolerance.py
   scripts/breadcrumb_return.py
   scripts/init_map_labels.py
   scripts/go_to_label.py

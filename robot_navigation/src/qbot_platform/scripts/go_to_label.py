@@ -131,17 +131,18 @@ def find_label_in_file(labels_file, query):
 
 
 class LabelNavigator(Node):
-    def __init__(self, action_name, status_topic):
+    def __init__(self, action_name, status_topic, cmd_vel_topic="/cmd_vel_nav"):
         super().__init__("go_to_label")
         self.action_name = action_name
         self.status_topic = status_topic
+        self.cmd_vel_topic = cmd_vel_topic
         self.client = ActionClient(self, NavigateToPose, action_name)
         self.global_localization_client = self.create_client(
             Empty,
             "/reinitialize_global_localization",
         )
         self.status_pub = self.create_publisher(String, status_topic, 10)
-        self.cmd_vel_pub = self.create_publisher(Twist, "/cmd_vel", 10)
+        self.cmd_vel_pub = self.create_publisher(Twist, cmd_vel_topic, 10)
         self.labels = []
         self.labels_file = None
         self.server_timeout_sec = 10.0
@@ -168,6 +169,9 @@ class LabelNavigator(Node):
             "/scan",
             self.scan_callback,
             qos_profile_sensor_data,
+        )
+        self.get_logger().info(
+            f"Direct motion commands publish to {self.cmd_vel_topic}."
         )
 
     def pose_callback(self, msg):
@@ -856,6 +860,14 @@ def parse_args():
         help="std_msgs/String topic for completed navigation status",
     )
     parser.add_argument(
+        "--cmd-vel-topic",
+        default="/cmd_vel_nav",
+        help=(
+            "Twist input used for localization and full-spin commands; Nav2's "
+            "velocity smoother consumes /cmd_vel_nav"
+        ),
+    )
+    parser.add_argument(
         "--server-timeout",
         type=float,
         default=10.0,
@@ -874,7 +886,11 @@ def main():
         return 0
 
     rclpy.init()
-    node = LabelNavigator(args.action_name, args.status_topic)
+    node = LabelNavigator(
+        args.action_name,
+        args.status_topic,
+        args.cmd_vel_topic,
+    )
     try:
         if args.listen or not args.label:
             node.listen_for_labels(labels_file, args.topic, args.server_timeout)

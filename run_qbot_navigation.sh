@@ -9,9 +9,12 @@ RUN_QBOT_SETUP="$HOME/ros2/install/setup.bash"
 RUN_MAP=""
 RUN_LABELS=""
 RUN_SCAN_FILTER="$RUN_NAV_DIR/filters/scan_wedge_filter.json"
+RUN_USE_ADAPTIVE_GOAL_TOLERANCE=true
+RUN_GOAL_TOLERANCE_DESCRIPTION="adaptive"
+RUN_BUILD_STAMP="$RUN_NAV_DIR/install/.qbot_platform_source_stamp"
 
 usage() {
-    echo "Usage: $0 --map MAP.yaml [--labels LABELS.json] [--scan-filter-file FILTER.json]"
+    echo "Usage: $0 --map MAP.yaml [--labels LABELS.json] [--scan-filter-file FILTER.json] [--fixed-goal-tolerance]"
     echo
     echo "The map is required. If --labels is omitted, <map_stem>_labels.json is used."
     echo "Maps available in $RUN_MAP_DIR:"
@@ -42,6 +45,10 @@ while [ "$#" -gt 0 ]; do
             RUN_SCAN_FILTER="$2"
             shift 2
             ;;
+        --fixed-goal-tolerance)
+            RUN_USE_ADAPTIVE_GOAL_TOLERANCE=false
+            shift
+            ;;
         -h|--help)
             usage
             exit 0
@@ -58,6 +65,10 @@ if [ -z "$RUN_MAP" ]; then
     echo "ERROR: --map is required."
     usage
     exit 2
+fi
+
+if [ "$RUN_USE_ADAPTIVE_GOAL_TOLERANCE" = false ]; then
+    RUN_GOAL_TOLERANCE_DESCRIPTION="fixed at YAML value"
 fi
 
 case "$RUN_MAP" in
@@ -108,16 +119,25 @@ echo "ROS_DOMAIN_ID: $ROS_DOMAIN_ID"
 echo "Map:           $RUN_MAP"
 echo "Labels:        $RUN_LABELS"
 echo "Scan filter:   $RUN_SCAN_FILTER"
+echo "Goal tolerance: $RUN_GOAL_TOLERANCE_DESCRIPTION"
 echo "=========================================="
 
 source /opt/ros/humble/setup.bash
 source "$RUN_QBOT_SETUP"
 
-if [ ! -f "$RUN_NAV_DIR/install/setup.bash" ]; then
+RUN_NEEDS_BUILD=false
+if [ ! -f "$RUN_NAV_DIR/install/setup.bash" ] || [ ! -f "$RUN_BUILD_STAMP" ]; then
+    RUN_NEEDS_BUILD=true
+elif find "$RUN_NAV_DIR/src/qbot_platform" -type f ! -path '*/__pycache__/*' -newer "$RUN_BUILD_STAMP" -print -quit | grep -q .; then
+    RUN_NEEDS_BUILD=true
+fi
+
+if [ "$RUN_NEEDS_BUILD" = true ]; then
     echo
-    echo "Navigation workspace has not been built. Building qbot_platform..."
+    echo "qbot_platform is missing or out of date. Building it now..."
     cd "$RUN_NAV_DIR"
     colcon build --packages-select qbot_platform
+    touch "$RUN_BUILD_STAMP"
 fi
 
 source "$RUN_NAV_DIR/install/setup.bash"
@@ -142,6 +162,7 @@ ros2 launch qbot_platform \
     labels_file:="$RUN_LABELS" \
     scan_filter_file:="$RUN_SCAN_FILTER" \
     use_scan_filter:=true \
+    use_adaptive_goal_tolerance:="$RUN_USE_ADAPTIVE_GOAL_TOLERANCE" \
     use_breadcrumb_return:=false &
 
 RUN_NAV_PID=$!

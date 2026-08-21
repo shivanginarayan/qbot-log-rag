@@ -149,14 +149,28 @@ status = 4
 SUCCEEDED
 Nav2 Goal Tolerance
 
-Current source configuration:
+The fixed source configuration remains:
 
-xy_goal_tolerance: 0.10
-yaw_goal_tolerance: 0.12
+xy_goal_tolerance: 0.25
+yaw_goal_tolerance: 0.25
 
-Note that the successful navigation test was performed before rebuilding
-the 0.10 m position-tolerance change. The installed configuration during
-that successful run still allowed 0.25 m position tolerance.
+The separately launched adaptive_goal_tolerance node tightens only the XY
+tolerance to 0.10 m after three AMCL position standard-deviation readings at
+or below 0.08 m. It restores 0.25 m above 0.12 m uncertainty, or when the AMCL
+pose is invalid, missing, or stale. This behavior is enabled by default.
+
+Start the website with the fixed fallback behavior when diagnosing or rolling
+back the feature:
+
+./run_qbot_map_labeler.sh --fixed-goal-tolerance
+
+Disable it during a running session with:
+
+ros2 param set /adaptive_goal_tolerance enabled false
+
+The direct controller fallback is:
+
+ros2 param set /controller_server general_goal_checker.xy_goal_tolerance 0.25
 
 Starting Navigation
 
@@ -169,6 +183,25 @@ uses ROS_DOMAIN_ID=63, saves the matching labels JSON, builds if necessary,
 starts the filtered-LiDAR Nav2 stack, and notifies the page when it is ready.
 Use Stop Navigation before starting a different selected map. Build and launch
 logs remain in the terminal that runs the website.
+
+Web-Controlled Manual Mapping
+
+The same website can create a new Cartographer map without opening additional
+terminals. Stop Navigation, press New Map, and reserve a unique map name. The
+website starts the QBot driver, filtered LiDAR, wheel odometry, Cartographer,
+the occupancy-grid publisher, and the physical gamepad command node on
+ROS_DOMAIN_ID=63.
+
+Hold LB on the gamepad to enable motion and release LB to stop. A scaled live
+/map preview updates in the browser about once per second. This preview is
+downsampled only for display; Finish & Save writes the full 0.01 m/cell map.
+
+Finish & Save stages and validates the PGM/YAML pair, creates the matching
+labels JSON with the map-origin label, and only then exposes the map in the
+selector. It never overwrites an existing map. If saving fails, mapping remains
+active so the operator can retry. Cancel Mapping stops the stack and discards
+the unsaved session.
+
 Next Stage: Log Analysis
 
 The next stage is to record generic robot evidence rather than

@@ -68,6 +68,20 @@ amcl_rclcpp_node:
   ros__parameters:
     use_sim_time: false
 
+adaptive_goal_tolerance:
+  ros__parameters:
+    enabled: true
+    pose_topic: /amcl_pose
+    controller_node: /controller_server
+    goal_checker_id: general_goal_checker
+    precise_xy_tolerance: 0.10
+    normal_xy_tolerance: 0.25
+    precise_enter_std_dev: 0.08
+    precise_exit_std_dev: 0.12
+    required_confident_samples: 3
+    pose_timeout: 2.0
+    update_interval: 1.0
+
 bt_navigator:
   ros__parameters:
     use_sim_time: false
