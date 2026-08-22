@@ -9,6 +9,7 @@ from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -24,6 +25,8 @@ def generate_launch_description():
     scan_filter_file = LaunchConfiguration("scan_filter_file")
     raw_scan_topic = LaunchConfiguration("raw_scan_topic")
     filtered_scan_topic = LaunchConfiguration("filtered_scan_topic")
+    mapping_label_topic = LaunchConfiguration("mapping_label_topic")
+    mapping_label_button_bit = LaunchConfiguration("mapping_label_button_bit")
     mapping_scan_topic = PythonExpression(
         [
             "'",
@@ -74,6 +77,16 @@ def generate_launch_description():
             default_value="/scan_filtered",
             description="Filtered LaserScan topic consumed by Cartographer",
         ),
+        DeclareLaunchArgument(
+            "mapping_label_topic",
+            default_value="/mapping/drop_label",
+            description="Empty topic published when the mapping label button is pressed",
+        ),
+        DeclareLaunchArgument(
+            "mapping_label_button_bit",
+            default_value="1",
+            description="Zero-based game-controller button bit used to drop a label",
+        ),
     ]
 
     base_launch = IncludeLaunchDescription(
@@ -104,6 +117,16 @@ def generate_launch_description():
         executable="command",
         name="joystickCommands",
         output="screen",
+        parameters=[
+            {"mapping_label_topic": mapping_label_topic},
+            {
+                "mapping_label_button_bit": ParameterValue(
+                    mapping_label_button_bit,
+                    value_type=int,
+                )
+            },
+            {"manual_drive_enabled": True},
+        ],
     )
     scan_filter = Node(
         condition=IfCondition(use_scan_filter),

@@ -1,0 +1,3 @@
+{
+  "C_Cpp.default.compileCommands": "${workspaceFolder}/robot_navigation/build/qbot_platform/compile_commands.json"
+}

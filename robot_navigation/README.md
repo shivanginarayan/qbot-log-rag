@@ -104,68 +104,43 @@ ros2 run milton_final_project light_controller_node
 
 ## Run Controller QBot Mapping
 
-This launch file starts the QBot platform driver, QBot lidar, QBot lidar TF,
-Cartographer mapping, and QBot's built-in controller command node. Use the QBot
-controller to drive while Cartographer builds the map.
-
-Saved maps are written to `/home/nvidia/857_Final_Project_Code/maps` as paired
-`.yaml` and image files with names like `mapped_area_20260505_153000.yaml`.
+The normal mapping workflow is now managed by the map-label website. From the
+repository root, run:
 
 ```bash
-cd /home/nvidia/857_Final_Project_Code
-source /opt/ros/humble/setup.bash
-source /home/nvidia/ros2/install/setup.bash
-colcon build
-source install/setup.bash
-ros2 launch milton_final_project slam_keyboard_mapping_launch.py
+./run_qbot_map_labeler.sh
 ```
 
-When you are ready to save the map, keep the mapping launch running and use a
-second terminal:
+Open `http://ROBOT_IP:8765`, stop Navigation, and press **New Map**. The website
+starts the physical driver, filtered LiDAR, wheel odometry, Cartographer, live
+occupancy grid, and physical gamepad command node. Hold LB to enable motion and
+release LB to stop. The browser overlays Cartographer's live QBot pose. With LB
+released, press B to drop sequential labels at the current pose.
+
+Press **Finish & Save** when mapping is complete. The website validates and
+saves the full-resolution PGM/YAML pair and matching labels JSON under
+`robot_navigation/maps`, then selects the new map for labeling. Press **Cancel
+Mapping** to stop without saving. Existing map names are never overwritten.
+Delete Map moves old map files into recoverable `.trash` storage. After
+starting navigation, Localize must complete before any Go command is accepted.
+
+Costmap inflation is configured at `0.50 m` locally and `0.65 m` globally while
+the physical `robot_radius` remains `0.35 m`.
+The NavigateToPose behavior tree also treats less than `0.15 m` of movement in
+10 seconds as stalled while following a path. Its controller recovery clears
+the local costmap and requests a slow, collision-checked `0.20 m` reverse,
+followed by the standard system clear/spin/wait/replan sequence if backing up
+is unsafe or unsuccessful. This is progress-based recovery rather than
+physical bumper detection.
+
+The equivalent troubleshooting entrypoint is:
 
 ```bash
-cd /home/nvidia/857_Final_Project_Code
-source /opt/ros/humble/setup.bash
-source /home/nvidia/ros2/install/setup.bash
-source install/setup.bash
-ros2 run milton_final_project save_latest_map
+./run_qbot_mapping.sh \
+  --scan-filter-file robot_navigation/filters/scan_wedge_filter.json \
+  --resolution 0.01 \
+  --publish-period 1.0
 ```
-
-Saved maps are cleaned by default: tiny occupied speckles are removed and very
-small wall gaps are closed in the generated `.pgm`. To save the unfiltered map
-instead, run:
-
-```bash
-ros2 run milton_final_project save_latest_map -- --raw
-```
-
-If you saved with `nav2_map_server map_saver_cli`, clean that saved map after
-saving:
-
-```bash
-ROS_DOMAIN_ID=57 ros2 run milton_final_project filter_saved_map -- \
-  --map /home/nvidia/857_Final_Project_Code/maps/slam_toolbox_map.yaml \
-  --overwrite
-```
-
-This keeps `.raw` backups beside the original files and removes small occupied
-speckles, small wall gaps, and thin free-space ray spikes.
-
-After it prints `Map save complete`, you can stop the mapping launch with
-`Ctrl+C`.
-
-To save the robot's current pose as the starting location for the map, run this
-after saving the map:
-
-```bash
-ROS_DOMAIN_ID=57 ros2 run milton_final_project save_robot_start_pose \
-  --map-dir /home/nvidia/857_Final_Project_Code/maps \
-  --map slam_toolbox_map.yaml
-```
-
-This resets the map's labels by default and writes `robot_start`, `start`,
-`home`, and `original` to the same pose. Add `--keep-existing-labels` if you are
-updating the start pose on a map whose other labels you want to keep.
 
 ## View A Saved Map In 3D Over SSH
 

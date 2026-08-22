@@ -37,12 +37,18 @@ def generate_launch_description():
         "'",
     ])
     params_file = os.path.join(package_dir, "config", "qbot_platform_slam_and_nav.yaml")
+    navigate_to_pose_bt = os.path.join(
+        package_dir,
+        "behavior_trees",
+        "qbot_navigate_to_pose_with_backup.xml",
+    )
     configured_params = RewrittenYaml(
         source_file=params_file,
         param_rewrites={
             "amcl.ros__parameters.scan_topic": nav_scan_topic,
             "local_costmap.local_costmap.ros__parameters.voxel_layer.scan.topic": nav_scan_topic,
             "global_costmap.global_costmap.ros__parameters.obstacle_layer.scan.topic": nav_scan_topic,
+            "bt_navigator.ros__parameters.default_nav_to_pose_bt_xml": navigate_to_pose_bt,
         },
         convert_types=True,
     )

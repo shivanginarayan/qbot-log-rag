@@ -23,12 +23,27 @@ website saves the selected map's labels and starts Nav2 with its matching YAML
 and JSON. Build and ROS launch output stays in this terminal; the page shows a
 ready notification when AMCL and Nav2 are active.
 
+When the ready notification appears, press **Localize** and keep the robot's
+surroundings clear for the full spin. The website keeps every **Go** button
+locked until the spin succeeds and a fresh `/amcl_pose` arrives. Stopping or
+failing localization requires pressing **Localize** again.
+
 Use **Stop Navigation** before starting a different map. Merely changing the
 displayed map does not reload Nav2; while the maps differ, the page disables
 Go, Localize, and the live pose marker and shows both map names.
 
 Use **Rebuild** after changing package source, configuration, or launch files.
 All website-managed commands use `ROS_DOMAIN_ID=63`.
+
+The Nav2 costmaps retain the QBot's `0.35 m` physical collision radius. Their
+soft inflation radii are `0.50 m` locally and `0.65 m` globally, allowing more
+usable clearance near walls without shrinking the collision footprint.
+
+If Nav2 sees less than `0.15 m` of movement over 10 seconds while following a
+path, it clears the local costmap and tries a slow, collision-checked `0.20 m`
+backup before retrying. A blocked rear path causes that action to fail safely
+and lets the general clear/spin/wait/replan sequence run. This detects lack of
+progress; it is not a bumper sensor.
 
 ## Map a New Area from the Website
 
@@ -49,12 +64,27 @@ RT            forward
 Left stick    turn
 A + RT        reverse
 Release LB    stop motion
+B (LB released) drop label1, label2, ... at the QBot pose
 ```
+
+If the terminal reports that the QBot controller is unavailable or was lost,
+reconnect/power-cycle it and ensure no separately launched `command` or
+`joystickCommands` process is running. The mapping controller node closes a
+failed handle and retries controller 1 automatically every two seconds.
+
+The live map shows Cartographer's `/tracked_pose` as an orange QBot arrow.
+Each B press is edge-triggered, so holding B cannot create duplicates. Dropped
+labels are shown immediately and are written into the new map's labels JSON;
+rename or delete them normally after **Finish & Save**.
 
 When the area is complete, release LB and press **Finish & Save**. The website
 saves and validates `<name>.pgm` and `<name>.yaml`, creates
 `<name>_labels.json`, stops mapping, refreshes the selector, and opens the new
 map for labels. Existing map files are never overwritten.
+
+To remove an old map, stop Navigation and Mapping, select the map, and press
+**Delete Map**. After exact-name confirmation, its PGM, YAML, and labels JSON
+move to `robot_navigation/maps/.trash/` rather than being permanently erased.
 
 Press **Cancel Mapping** to stop Cartographer without saving. The red **Stop
 robot** button is navigation-only during manual mapping; release the gamepad's

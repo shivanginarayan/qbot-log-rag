@@ -36,7 +36,7 @@ ament_target_dependencies(fixed_lidar_frame geometry_msgs rclcpp tf2 tf2_ros)
 
 add_executable(command src/command.cpp)
 target_link_libraries(command -lquanser_devices -lquanser_communications -lquanser_runtime -lquanser_common)
-ament_target_dependencies(command geometry_msgs rclcpp)
+ament_target_dependencies(command geometry_msgs rclcpp std_msgs)
 
 install(
   TARGETS
@@ -67,6 +67,10 @@ install(DIRECTORY rt_models
 )
 
 install(DIRECTORY config
+  DESTINATION share/${PROJECT_NAME}/
+)
+
+install(DIRECTORY behavior_trees
   DESTINATION share/${PROJECT_NAME}/
 )
 

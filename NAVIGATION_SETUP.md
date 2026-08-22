@@ -195,12 +195,41 @@ ROS_DOMAIN_ID=63.
 Hold LB on the gamepad to enable motion and release LB to stop. A scaled live
 /map preview updates in the browser about once per second. This preview is
 downsampled only for display; Finish & Save writes the full 0.01 m/cell map.
+The orange QBot arrow comes from Cartographer's `/tracked_pose`. With LB
+released, press B once to drop `label1`, `label2`, and subsequent labels at the
+current mapping pose. These become normal renameable navigation labels after
+the map is saved.
+
+Nav2 uses a `0.35 m` physical robot radius. The configured inflation radii are
+`0.50 m` for the local costmap and `0.65 m` for the global costmap; these are
+soft avoidance margins and can be tuned independently of the collision radius.
+If the robot makes less than `0.15 m` of progress in 10 seconds, the QBot
+NavigateToPose controller recovery clears its local costmap and requests a
+slow, collision-checked `0.20 m` backup before retrying the path. If the rear
+path is blocked, Nav2 skips the unsafe reverse and proceeds through its general
+clearing, spinning, waiting, and replanning recoveries. This is stuck recovery
+based on navigation progress and LiDAR/costmap clearance, not a bumper or
+physical-impact detector.
+
+While mapping, the gamepad node stays alive if the controller is initially off
+or briefly disconnects. It reports the Quanser error code in the terminal,
+closes a failed HID handle, and retries controller 1 every two seconds. If it
+cannot reconnect, power-cycle/reconnect the gamepad and make sure another
+manually launched `command`/`joystickCommands` node is not using it.
 
 Finish & Save stages and validates the PGM/YAML pair, creates the matching
 labels JSON with the map-origin label, and only then exposes the map in the
 selector. It never overwrites an existing map. If saving fails, mapping remains
 active so the operator can retry. Cancel Mapping stops the stack and discards
 the unsaved session.
+
+Saved maps can be removed with Delete Map only while both stacks are stopped.
+Deletion requires typing the exact filename and moves the complete map set to
+the hidden `.trash` directory for recovery.
+
+After Start Navigation reports ready, Localize is mandatory. The website and
+backend reject navigation goals until the full localization spin succeeds and
+a fresh AMCL pose has been received.
 
 Next Stage: Log Analysis
 

@@ -28,7 +28,10 @@ source "$REBUILD_QBOT_SETUP"
 
 cd "$REBUILD_NAV_DIR"
 echo "Building qbot_platform in $REBUILD_NAV_DIR (ROS domain $ROS_DOMAIN_ID)..."
-colcon build --packages-select qbot_platform "$@"
+colcon build \
+    --packages-select qbot_platform \
+    "$@" \
+    --cmake-args -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 touch "$REBUILD_NAV_DIR/install/.qbot_platform_source_stamp"
 source "$REBUILD_NAV_DIR/install/setup.bash"
 

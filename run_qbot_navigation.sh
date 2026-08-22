@@ -136,7 +136,9 @@ if [ "$RUN_NEEDS_BUILD" = true ]; then
     echo
     echo "qbot_platform is missing or out of date. Building it now..."
     cd "$RUN_NAV_DIR"
-    colcon build --packages-select qbot_platform
+    colcon build \
+        --packages-select qbot_platform \
+        --cmake-args -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
     touch "$RUN_BUILD_STAMP"
 fi
 

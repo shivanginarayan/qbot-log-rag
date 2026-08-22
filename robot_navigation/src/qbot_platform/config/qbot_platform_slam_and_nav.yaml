@@ -90,10 +90,11 @@ bt_navigator:
     odom_topic: /odom
     bt_loop_duration: 10
     default_server_timeout: 20
-    # 'default_nav_through_poses_bt_xml' and 'default_nav_to_pose_bt_xml' are use defaults:
-    # nav2_bt_navigator/navigate_to_pose_w_replanning_and_recovery.xml
+    # The launch file supplies qbot_navigate_to_pose_with_backup.xml for
+    # NavigateToPose so a collision-checked reverse is attempted when the
+    # controller cannot make progress along a path.
+    # 'default_nav_through_poses_bt_xml' continues to use the Nav2 default:
     # nav2_bt_navigator/navigate_through_poses_w_replanning_and_recovery.xml
-    # They can be set here or via a RewrittenYaml remap from a parent launch file to Nav2.
     plugin_lib_names:
       - nav2_compute_path_to_pose_action_bt_node
       - nav2_compute_path_through_poses_action_bt_node
@@ -167,8 +168,10 @@ controller_server:
     # Progress checker parameters
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
-      required_movement_radius: 0.4
-      movement_time_allowance: 100.0
+      # Treat 0.15 m within 10 seconds as progress. The previous 100-second
+      # allowance delayed recovery for too long when the robot was pinned.
+      required_movement_radius: 0.15
+      movement_time_allowance: 10.0
     # Goal checker parameters
     #precise_goal_checker:
     #  plugin: "nav2_controller::SimpleGoalChecker"
@@ -275,8 +278,9 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 2.2
-        #inflation_radius: 0.1
-        inflation_radius: 0.65
+        # Keep the 0.35 m physical collision radius below, but use only a
+        # 0.15 m soft margin so the controller can use valid space near walls.
+        inflation_radius: 0.50
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True
@@ -333,10 +337,9 @@ global_costmap:
         map_subscribe_transient_local: True
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        # cost_scaling_factor: 1.0
-        # inflation_radius: 0.1
         cost_scaling_factor: 2.2
-        inflation_radius: 0.85
+        # A 0.30 m soft planning margin outside the 0.35 m robot radius.
+        inflation_radius: 0.65
       always_send_full_costmap: True
 
 map_saver:

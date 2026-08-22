@@ -8,10 +8,12 @@ MAPPING_QBOT_SETUP="$HOME/ros2/install/setup.bash"
 MAPPING_SCAN_FILTER="$MAPPING_NAV_DIR/filters/scan_wedge_filter.json"
 MAPPING_RESOLUTION="0.01"
 MAPPING_PUBLISH_PERIOD="1.0"
+MAPPING_LABEL_TOPIC="/mapping/drop_label"
+MAPPING_LABEL_BUTTON_BIT="1"
 MAPPING_BUILD_STAMP="$MAPPING_NAV_DIR/install/.qbot_platform_source_stamp"
 
 usage() {
-    echo "Usage: $0 [--scan-filter-file FILTER.json] [--resolution METERS] [--publish-period SECONDS]"
+    echo "Usage: $0 [--scan-filter-file FILTER.json] [--resolution METERS] [--publish-period SECONDS] [--label-topic TOPIC] [--label-button-bit BIT]"
     echo
     echo "Starts physical QBot manual Cartographer mapping with the gamepad controller."
 }
@@ -33,6 +35,16 @@ while [ "$#" -gt 0 ]; do
             MAPPING_PUBLISH_PERIOD="$2"
             shift 2
             ;;
+        --label-topic)
+            [ "$#" -ge 2 ] || { echo "ERROR: --label-topic requires a value"; usage; exit 2; }
+            MAPPING_LABEL_TOPIC="$2"
+            shift 2
+            ;;
+        --label-button-bit)
+            [ "$#" -ge 2 ] || { echo "ERROR: --label-button-bit requires a value"; usage; exit 2; }
+            MAPPING_LABEL_BUTTON_BIT="$2"
+            shift 2
+            ;;
         -h|--help)
             usage
             exit 0
@@ -45,6 +57,16 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
+case "$MAPPING_LABEL_BUTTON_BIT" in
+    ''|*[!0-9]*)
+        echo "ERROR: --label-button-bit must be an integer between 0 and 31"
+        exit 2
+        ;;
+esac
+if [ "$MAPPING_LABEL_BUTTON_BIT" -gt 31 ]; then
+    echo "ERROR: --label-button-bit must be between 0 and 31"
+    exit 2
+fi
 if [ ! -f /opt/ros/humble/setup.bash ]; then
     echo "ERROR: ROS Humble setup not found: /opt/ros/humble/setup.bash"
     exit 1
@@ -78,7 +100,9 @@ fi
 if [ "$MAPPING_NEEDS_BUILD" = true ]; then
     echo "qbot_platform is missing or out of date. Building it now..."
     cd "$MAPPING_NAV_DIR"
-    colcon build --packages-select qbot_platform
+    colcon build \
+        --packages-select qbot_platform \
+        --cmake-args -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
     touch "$MAPPING_BUILD_STAMP"
 fi
 source "$MAPPING_NAV_DIR/install/setup.bash"
@@ -92,6 +116,7 @@ echo "Resolution:    $MAPPING_RESOLUTION m/pixel"
 echo "Map publish:   every $MAPPING_PUBLISH_PERIOD sec"
 echo "Scan filter:   $MAPPING_SCAN_FILTER"
 echo "Controller:    hold LB to enable motion"
+echo "Drop label:    release LB, then press B (button bit $MAPPING_LABEL_BUTTON_BIT)"
 echo "=========================================="
 
 MAPPING_PID=""
@@ -110,11 +135,14 @@ ros2 launch qbot_platform qbot_platform_manual_map_launch.py \
     resolution:="$MAPPING_RESOLUTION" \
     publish_period_sec:="$MAPPING_PUBLISH_PERIOD" \
     scan_filter_file:="$MAPPING_SCAN_FILTER" \
+    mapping_label_topic:="$MAPPING_LABEL_TOPIC" \
+    mapping_label_button_bit:="$MAPPING_LABEL_BUTTON_BIT" \
     use_scan_filter:=true &
 
 MAPPING_PID=$!
 echo "Mapping process started with PID: $MAPPING_PID"
 echo "Drive manually with the QBot gamepad. Release LB to stop motion."
+echo "With LB released, press B once to drop label1, label2, and so on."
 echo "Use Finish & Save or Cancel Mapping in the website."
 
 set +e

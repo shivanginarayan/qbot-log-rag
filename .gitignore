@@ -8,6 +8,9 @@ env/
 
 # VSCode
 .vscode/
+!.vscode/
+.vscode/*
+!.vscode/settings.json
 
 # Data (optional)
 data/processed/
