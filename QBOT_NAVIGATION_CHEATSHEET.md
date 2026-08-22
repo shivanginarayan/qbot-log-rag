@@ -184,7 +184,7 @@ For manual troubleshooting only, the shell entrypoint now requires a map:
 
 ```bash
 cd ~/qbot-log-rag
-export ROS_DOMAIN_ID=57
+export ROS_DOMAIN_ID=63
 source /opt/ros/humble/setup.bash
 source "$HOME/ros2/install/setup.bash"
 source "$PWD/robot_navigation/install/setup.bash"
@@ -429,7 +429,7 @@ live pose and lidar alignment match the map.
 RViz requires a graphical display. On a graphical ROS machine:
 
 ```bash
-export ROS_DOMAIN_ID=57
+export ROS_DOMAIN_ID=63
 rviz2
 ```
 

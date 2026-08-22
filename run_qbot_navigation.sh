@@ -108,7 +108,7 @@ fi
 RUN_MAP="$(realpath "$RUN_MAP")"
 RUN_LABELS="$(realpath "$RUN_LABELS")"
 RUN_SCAN_FILTER="$(realpath "$RUN_SCAN_FILTER")"
-export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-63}"
+export ROS_DOMAIN_ID=63
 
 echo "=========================================="
 echo " QBot Navigation"

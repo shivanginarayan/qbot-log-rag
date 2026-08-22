@@ -8,7 +8,7 @@ LABELER_QBOT_SETUP="$HOME/ros2/install/setup.bash"
 LABELER_HOST="${QBOT_LABELER_HOST:-0.0.0.0}"
 LABELER_PORT="${QBOT_LABELER_PORT:-8765}"
 
-export ROS_DOMAIN_ID=57
+export ROS_DOMAIN_ID=63
 
 if [ ! -f /opt/ros/humble/setup.bash ]; then
     echo "ERROR: ROS Humble setup not found: /opt/ros/humble/setup.bash"

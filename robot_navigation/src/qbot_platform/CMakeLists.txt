@@ -35,6 +35,7 @@ add_executable(fixed_lidar_frame src/fixed_lidar_frame.cpp)
 ament_target_dependencies(fixed_lidar_frame geometry_msgs rclcpp tf2 tf2_ros)
 
 add_executable(command src/command.cpp)
+target_compile_options(command PRIVATE -include quanser/quanser_extern.h)
 target_link_libraries(command -lquanser_devices -lquanser_communications -lquanser_runtime -lquanser_common)
 ament_target_dependencies(command geometry_msgs rclcpp std_msgs)
 

@@ -10,6 +10,8 @@
 #include <stdexcept>
 #include <string>
 
+
+#include "quanser/quanser_extern.h"
 #include "quanser/quanser_hid.h"
 #include "quanser/quanser_messages.h"
 #include "quanser/quanser_memory.h"
@@ -31,6 +33,8 @@ public:
             "controller_number", 1);
         const int reconnect_interval_ms = this->declare_parameter<int>(
             "reconnect_interval_ms", 2000);
+        const int poll_failure_grace_ms = this->declare_parameter<int>(
+            "poll_failure_grace_ms", 1000);
         this->declare_parameter<bool>("manual_drive_enabled", true);
 
         validate_button_bit("mapping_label_button_bit", mapping_label_button_bit_);
@@ -47,8 +51,14 @@ public:
             throw std::invalid_argument(
                 "reconnect_interval_ms must be at least 100");
         }
+        if (poll_failure_grace_ms < 0)
+        {
+            throw std::invalid_argument(
+                "poll_failure_grace_ms cannot be negative");
+        }
         controller_number_ = static_cast<t_uint8>(controller_number);
         reconnect_interval_ = std::chrono::milliseconds(reconnect_interval_ms);
+        poll_failure_grace_ = std::chrono::milliseconds(poll_failure_grace_ms);
 
         command_publisher_ = this->create_publisher<geometry_msgs::msg::Twist>(
             "cmd_vel", 10);
@@ -57,12 +67,24 @@ public:
 
         last_open_attempt_ =
             std::chrono::steady_clock::now() - reconnect_interval_;
-        try_open_controller();
+        const bool connected = try_open_controller();
+        // The stock driver polled the gamepad continuously. 20 ms keeps the
+        // state fresh and the device buffer drained without burning a core.
         timer_ = this->create_wall_timer(
-            50ms, std::bind(&CommandPublisher::poll_controller, this));
-        RCLCPP_INFO(
-            this->get_logger(),
-            "Gamepad ready: release LB and press B to drop a mapping label.");
+            20ms, std::bind(&CommandPublisher::poll_controller, this));
+        if (connected)
+        {
+            RCLCPP_INFO(
+                this->get_logger(),
+                "Gamepad ready: release LB and press B to drop a mapping label.");
+        }
+        else
+        {
+            RCLCPP_WARN(
+                this->get_logger(),
+                "Gamepad is not connected yet; retrying every %.1f seconds.",
+                std::chrono::duration<double>(reconnect_interval_).count());
+        }
     }
 
     ~CommandPublisher() override
@@ -125,7 +147,7 @@ private:
 
         gamepad_open_ = true;
         data_ = t_game_controller_states{};
-        is_new_ = false;
+        poll_failing_ = false;
         suppress_button_edges_once_ = true;
         RCLCPP_INFO(
             this->get_logger(),
@@ -145,6 +167,85 @@ private:
         gamepad_ = {};
     }
 
+    // The gamepad only produces a report when something actually moves, and the
+    // handle is non-blocking, so an idle controller answers nearly every poll
+    // with -QERR_WOULD_BLOCK. That means "nothing newer queued", not a fault:
+    // data_ still holds the live stick and button state and must keep driving.
+    // Drain whatever is queued, then fall back on the last known state.
+    bool read_latest_state()
+    {
+        constexpr int max_reads = 32;
+        for (int read = 0; read < max_reads; ++read)
+        {
+            t_boolean is_new = false;
+            t_game_controller_states latest = data_;
+            result_ = game_controller_poll(gamepad_, &latest, &is_new);
+            if (result_ == -QERR_WOULD_BLOCK || result_ == -QERR_INTERRUPTED)
+            {
+                break;
+            }
+            if (result_ < 0)
+            {
+                note_poll_failure();
+                return false;
+            }
+            data_ = latest;
+            if (!is_new)
+            {
+                break;
+            }
+        }
+
+        poll_failing_ = false;
+        return true;
+    }
+
+    // Only genuine device errors reach here. Give up on the controller once one
+    // has persisted for the whole grace window, so the gamepad is not taken down
+    // for reconnect_interval_ by a single transient Quanser error.
+    void note_poll_failure()
+    {
+        const auto now = std::chrono::steady_clock::now();
+        if (!poll_failing_)
+        {
+            poll_failing_ = true;
+            poll_failure_started_ = now;
+        }
+
+        if (now - poll_failure_started_ < poll_failure_grace_)
+        {
+            RCLCPP_WARN_THROTTLE(
+                this->get_logger(),
+                *this->get_clock(),
+                5000,
+                "QBot game controller %u poll failed (Quanser error %d); "
+                "keeping it open because it has not failed for %.1f seconds yet",
+                static_cast<unsigned int>(controller_number_),
+                static_cast<int>(result_),
+                std::chrono::duration<double>(poll_failure_grace_).count());
+            // Stop publishing while the state is unknown. The driver's own
+            // body_speed_duration timeout stops the robot if this persists.
+            return;
+        }
+
+        RCLCPP_ERROR(
+            this->get_logger(),
+            "Lost QBot game controller %u while polling (Quanser error %d); "
+            "closing it and retrying every %.1f seconds",
+            static_cast<unsigned int>(controller_number_),
+            static_cast<int>(result_),
+            std::chrono::duration<double>(reconnect_interval_).count());
+        if (was_manual_drive_enabled_)
+        {
+            publish_stop();
+            was_manual_drive_enabled_ = false;
+        }
+        close_controller();
+        poll_failing_ = false;
+        // Reopen on the next tick; try_open_controller() backs off from there.
+        last_open_attempt_ = now - reconnect_interval_;
+    }
+
     void poll_controller()
     {
         if (!gamepad_open_)
@@ -157,25 +258,8 @@ private:
             return;
         }
 
-        result_ = game_controller_poll(gamepad_, &data_, &is_new_);
-        if (result_ < 0)
+        if (!read_latest_state())
         {
-            RCLCPP_ERROR_THROTTLE(
-                this->get_logger(),
-                *this->get_clock(),
-                10000,
-                "Lost QBot game controller %u while polling (Quanser error %d); "
-                "closing it and retrying every %.1f seconds",
-                static_cast<unsigned int>(controller_number_),
-                static_cast<int>(result_),
-                std::chrono::duration<double>(reconnect_interval_).count());
-            if (was_manual_drive_enabled_)
-            {
-                publish_stop();
-                was_manual_drive_enabled_ = false;
-            }
-            close_controller();
-            last_open_attempt_ = std::chrono::steady_clock::now();
             return;
         }
 
@@ -252,14 +336,16 @@ private:
     int mapping_label_button_bit_ = 1;
     t_uint8 controller_number_ = 1;
     std::chrono::milliseconds reconnect_interval_{2000};
+    std::chrono::milliseconds poll_failure_grace_{1000};
     std::chrono::steady_clock::time_point last_open_attempt_{};
+    std::chrono::steady_clock::time_point poll_failure_started_{};
+    bool poll_failing_ = false;
     bool previous_label_button_pressed_ = false;
     bool suppress_button_edges_once_ = true;
     bool was_manual_drive_enabled_ = false;
     bool gamepad_open_ = false;
     t_game_controller gamepad_{};
     t_game_controller_states data_{};
-    t_boolean is_new_ = false;
     t_error result_ = 0;
 };
 
