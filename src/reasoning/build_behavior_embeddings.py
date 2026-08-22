@@ -61,46 +61,75 @@ def build_embedding_text(record):
         "unknown",
     )
 
-    direction = behavior.get(
-        "relative_direction",
-        "unknown",
+    occurrences = record.get(
+        "occurrences",
+        [],
     )
 
     occurrence_count = len(
-        record.get("occurrences", [])
+        occurrences
+    )
+
+    outcomes = {}
+
+    for occurrence in occurrences:
+        outcome = occurrence.get(
+            "outcome",
+            {},
+        )
+
+        status = (
+            outcome.get("status")
+            or outcome.get("navigation_status")
+            or "unknown"
+        )
+
+        outcomes[status] = (
+            outcomes.get(status, 0) + 1
+        )
+
+    outcome_text = ", ".join(
+        f"{count} {status}"
+        for status, count in outcomes.items()
     )
 
     return f"""
-Robot behavior.
+Robot behavior memory.
 
 Action family: {action}.
 Motion family: {motion}.
-Relative direction: {direction}.
 
-This describes a robot behavior involving {action},
-with {motion} motion in the {direction} direction
-relative to the robot's starting orientation.
+This behavior represents robot {action}
+involving {motion} motion.
 
-Possible descriptions include:
-move {direction},
-go {direction},
-drive {direction},
-travel {direction},
+Natural-language descriptions may include:
+navigate,
+navigation,
+move toward a goal,
+drive toward a destination,
+travel to a location,
 robot movement,
 navigation movement,
-navigation toward a goal.
+translation during navigation.
 
-Available evidence may include:
-navigation goals,
-navigation feedback,
-odometry,
+This is a generic behavior category.
+Map names, destination labels, outcomes,
+timestamps, and individual sensor observations
+belong to specific occurrences rather than
+the behavior identity itself.
+
+Available occurrence evidence may include:
+task events,
+wheel odometry,
 velocity commands,
-LiDAR,
-localization,
+LiDAR summaries,
+AMCL localization,
 timestamps,
+SQLite references,
 and rosbag evidence.
 
-This behavior has {occurrence_count} recorded occurrence(s).
+Recorded occurrences: {occurrence_count}.
+Recorded outcomes: {outcome_text or "unknown"}.
 """.strip()
 
 

@@ -100,6 +100,11 @@ python src/storage/lidar_logger.py \
     --session-id "$SESSION_ID" &
 PIDS+=($!)
 
+python src/storage/task_event_logger.py \
+    --db "$DB_PATH" \
+    --session-id "$SESSION_ID" &
+PIDS+=($!)
+
 ros2 bag record \
     -o "$BAG_DIR" \
     /scan \
@@ -108,7 +113,9 @@ ros2 bag record \
     /amcl_pose \
     /cmd_vel \
     /tf \
-    /tf_static &
+    /tf_static \
+    /label \
+    /robot/navigation_status &
 PIDS+=($!)
 
 wait

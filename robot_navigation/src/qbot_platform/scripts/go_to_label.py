@@ -788,6 +788,29 @@ class LabelNavigator(Node):
         self.publish_navigation_status(label, result.status)
         self.begin_global_localization()
 
+    # def publish_navigation_status(
+    #     self,
+    #     label,
+    #     status,
+    #     *,
+    #     event="finished",
+    #     message=None,
+    # ):
+    #     payload = {
+    #         "event": event,
+    #         "label": label_display(label),
+    #         "name": label.get("name"),
+    #         "kind": label.get("kind"),
+    #         "detail": label.get("detail"),
+    #         "status": status,
+    #     }
+    #     if message:
+    #         payload["message"] = message
+    #     msg = String()
+    #     msg.data = json.dumps(payload)
+    #     self.status_pub.publish(msg)
+    #     self.get_logger().info(f"Published navigation status to {self.status_topic}: {msg.data}")
+
     def publish_navigation_status(
         self,
         label,
@@ -800,16 +823,30 @@ class LabelNavigator(Node):
             "event": event,
             "label": label_display(label),
             "name": label.get("name"),
+            "label_id": label.get("id"),
             "kind": label.get("kind"),
             "detail": label.get("detail"),
+            "world": label.get("world"),
+            "yaw": label.get("yaw"),
+            "map": (
+                self.labels_file.stem.replace("_labels", "")
+                if getattr(self, "labels_file", None) is not None
+                else None
+            ),
             "status": status,
         }
+
         if message:
             payload["message"] = message
+
         msg = String()
         msg.data = json.dumps(payload)
+
         self.status_pub.publish(msg)
-        self.get_logger().info(f"Published navigation status to {self.status_topic}: {msg.data}")
+
+        self.get_logger().info(
+            f"Published navigation status to {self.status_topic}: {msg.data}"
+        )
 
 
 def save_last_label(label, status):

@@ -254,6 +254,32 @@ def initialize_database(db_path):
         )
     """)
 
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS task_events (
+            task_event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            event_time_ns INTEGER NOT NULL,
+            source_topic TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            map_name TEXT,
+            label_id TEXT,
+            label_name TEXT,
+            task_type TEXT,
+            status TEXT,
+            payload_json TEXT,
+            FOREIGN KEY(session_id) REFERENCES sessions(session_id)
+        )
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_task_events_session_time
+        ON task_events(session_id, event_time_ns)
+        """
+    )
+
     conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_navigation_goal_time
         ON navigation_goals(session_id, requested_at_ns)

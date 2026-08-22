@@ -166,3 +166,21 @@ class SessionManager:
 
         print(f"Session closed: {self.session_id}")
         print(f"Status: {status}")
+
+def main():
+    manager = SessionManager()
+
+    session_id = manager.start_session()
+
+    try:
+        input("Press Enter to close session...\n")
+    except KeyboardInterrupt:
+        print()
+
+    manager.close_session(
+        status="completed"
+    )
+
+
+if __name__ == "__main__":
+    main()
