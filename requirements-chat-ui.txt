@@ -1,0 +1,9 @@
+# QBot-compatible local embedding service for the standalone chat UI.
+# Install with --no-deps so pip does not replace the NVIDIA PyTorch build.
+sentence-transformers==3.2.1
+transformers==4.46.3
+huggingface-hub==0.36.2
+hf-xet==1.4.3
+tokenizers==0.20.3
+safetensors==0.5.3
+regex==2024.11.6
