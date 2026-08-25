@@ -10,7 +10,10 @@ from pathlib import Path
 
 import requests
 
-from build_evidence_packet import build_packet
+from build_evidence_packet import (
+    build_packet,
+    build_live_packet,
+)
 
 
 MODEL_EMBED = "bge-m3"
@@ -48,6 +51,12 @@ INTENT_EMBEDDINGS = (
 INTENT_INDEX = str(
     RUNTIME_DIR
     / "task_intent_index"
+)
+
+MAPS_DIR = (
+    REPO_DIR
+    / "robot_navigation"
+    / "maps"
 )
 
 def search_intents(
@@ -772,6 +781,7 @@ def build_llm_prompt(
     global_hits,
     packets,
     audience,
+    live_packet=None,
 ):
     retrieval_summary = {
         "map_matches": [
@@ -814,6 +824,15 @@ def build_llm_prompt(
             for hit in global_hits[:2]
         ],
     }
+    if live_packet is not None:
+
+        retrieval_summary[
+            "current_session"
+        ] = (
+            live_packet.get(
+                "live_session"
+            )
+        )
 
     if audience == "developer":
         audience_instructions = """
@@ -1001,6 +1020,89 @@ GROUNDING RULES:
     factual conclusion based on whether the reader
     is a user or developer.
 
+18. A live session is not a completed historical occurrence.
+
+19. If current_navigation.state is
+    "navigation_requested_waiting_for_start",
+    say that the request has been recorded but no
+    execution-start event has been recorded yet.
+    Do not call it a failure simply because STARTED
+    has not arrived yet.
+
+20. If current_navigation.state is
+    "navigation_in_progress",
+    the task is still executing.
+    Do not describe it as failed, interrupted,
+    unfinished, or successful unless a corresponding
+    completion event exists.
+
+21. Current-session SQLite evidence has priority for
+    questions about what the robot is doing now,
+    where it is now, why it is currently moving,
+    or what just happened.
+
+22. Historical memories may be used for comparison,
+    such as "Has this happened before?" or
+    "Why is this different from previous runs?"
+
+23. Do not treat the absence of a FINISHED event in
+    an active session as evidence that the task was
+    interrupted. It may simply still be running.
+
+24. For questions about the current map or the labels
+    currently defined on that map, prefer
+    current_map_metadata over historical map memory.
+
+25. The historical map behavior index contains executed
+    behavior occurrences and may not contain every label
+    defined in the current map.
+
+26. If current_map_metadata provides label_count or labels,
+    use those values directly when answering questions such
+    as "how many labels are there?" or "what labels are on
+    this map?"
+
+27. Do not infer the current map from the highest-scoring
+    historical semantic match when live current-session map
+    information is available.
+
+28. A null or missing map value in SQLite does NOT mean
+    that no map is loaded. It only means that the recorded
+    SQLite evidence has not identified the map.
+
+29. When live navigation runtime status provides
+    active_map, use that as the current runtime map.
+
+30. Distinguish live runtime state from recorded historical
+    evidence. For example, say:
+    "The navigation runtime currently reports map1234.pgm."
+    Do not claim that SQLite recorded the map if it did not.
+
+31. A localization_state such as "in_progress" means the
+    runtime reports localization is currently underway.
+    Do not describe the robot as localized unless the
+    localized field is true.
+
+32. Zero AMCL pose samples do not prove why localization failed.
+    They only show that no AMCL pose samples were recorded.
+
+33. Lack of robot motion does not prove that localization failed
+    because the robot did not move.
+
+34. If the ROS graph explicitly shows that /amcl does not exist,
+    you may state that AMCL is not currently running.
+
+35. Do not infer why a ROS node is absent unless process logs,
+    launch logs, lifecycle errors, or explicit runtime messages
+    identify the cause.
+
+36. If a runtime message says "verify AMCL is active", treat that
+    as a diagnostic hint, not proof of the underlying cause.
+
+37. For questions such as "is AMCL active?", direct ROS graph
+    evidence should take priority over historical memory and
+    indirect evidence such as missing pose samples.
+
 Answer the user's question directly.
 """.strip()
 
@@ -1054,6 +1156,180 @@ def call_nemotron(prompt):
         "content"
     ]
 
+def normalize_map_name(
+    map_name,
+):
+    if not map_name:
+        return None
+
+    name = Path(
+        str(map_name)
+    ).stem
+
+    if name.endswith(
+        "_labels"
+    ):
+        name = name[
+            :-len("_labels")
+        ]
+
+    return name
+
+
+def load_current_map_metadata(
+    map_name,
+):
+    map_name = normalize_map_name(
+        map_name
+    )
+
+    if not map_name:
+        return None
+
+    labels_path = (
+        MAPS_DIR
+        / f"{map_name}_labels.json"
+    )
+
+    result = {
+        "map":
+            map_name,
+
+        "labels_file":
+            str(labels_path),
+
+        "labels_file_exists":
+            labels_path.exists(),
+
+        "label_count":
+            None,
+
+        "labels":
+            [],
+    }
+
+    if not labels_path.exists():
+        return result
+
+    try:
+
+        data = json.loads(
+            labels_path.read_text(
+                encoding="utf-8"
+            )
+        )
+
+    except Exception as exc:
+
+        result[
+            "read_error"
+        ] = str(exc)
+
+        return result
+
+    labels = data.get(
+        "labels",
+        [],
+    )
+
+    if not isinstance(
+        labels,
+        list,
+    ):
+        labels = []
+
+    clean_labels = []
+
+    for label in labels:
+
+        if not isinstance(
+            label,
+            dict,
+        ):
+            continue
+
+        clean_labels.append(
+            {
+                "id":
+                    label.get("id"),
+
+                "name":
+                    label.get("name"),
+
+                "kind":
+                    label.get("kind"),
+
+                "detail":
+                    label.get("detail"),
+
+                "world":
+                    label.get("world"),
+
+                "yaw":
+                    label.get("yaw"),
+            }
+        )
+
+    result[
+        "labels"
+    ] = clean_labels
+
+    result[
+        "label_count"
+    ] = len(
+        clean_labels
+    )
+
+    return result
+
+
+def asks_about_current_map(
+    question,
+):
+    q = question.casefold()
+
+    phrases = [
+        "current map",
+        "this map",
+        "map are you using",
+        "which map",
+        "what map",
+    ]
+
+    return any(
+        phrase in q
+        for phrase in phrases
+    )
+
+
+def asks_about_labels(
+    question,
+):
+    q = question.casefold()
+
+    return (
+        "label" in q
+        or "labels" in q
+    )
+
+
+def asks_about_current_pose(
+    question,
+):
+    q = question.casefold()
+
+    phrases = [
+        "where are you",
+        "where is the robot",
+        "current position",
+        "current pose",
+        "where are you now",
+    ]
+
+    return any(
+        phrase in q
+        for phrase in phrases
+    )
 
 def main():
     parser = argparse.ArgumentParser()
@@ -1082,6 +1358,16 @@ def main():
     )
 
     parser.add_argument(
+        "--session-id",
+        default=None,
+        help=(
+            "Optional current session ID. "
+            "When supplied, live SQLite evidence "
+            "is included in the answer."
+        ),
+    )
+
+    parser.add_argument(
         "--show-evidence",
         action="store_true",
     )
@@ -1094,6 +1380,54 @@ def main():
     args = parser.parse_args()
 
     question = args.question
+
+    live_packet = None
+
+    if args.session_id:
+
+        try:
+
+            live_packet = (
+                build_live_packet(
+                    args.session_id
+                )
+            )
+
+        except Exception as exc:
+
+            print(
+                "WARNING: Could not read "
+                "live session evidence:"
+            )
+
+            print(
+                f"  {exc}"
+            )
+
+    current_map_metadata = None
+
+    if live_packet is not None:
+
+        live_info = (
+            live_packet.get(
+                "live_session"
+            )
+            or {}
+        )
+
+        current_map_name = (
+            live_info.get(
+                "map"
+            )
+        )
+
+        if current_map_name:
+
+            current_map_metadata = (
+                load_current_map_metadata(
+                    current_map_name
+                )
+            )
 
     query_vector = embed(
         question
@@ -1137,6 +1471,36 @@ def main():
     )
 
     packets = []
+    if current_map_metadata is not None:
+
+        if (
+            asks_about_current_map(
+                question
+            )
+            or asks_about_labels(
+                question
+            )
+        ):
+
+            packets.append(
+                {
+                    "current_map_metadata":
+                        current_map_metadata,
+
+                    "source_type":
+                        "current_map_file",
+                }
+            )
+
+     # Live/current SQLite evidence is independent
+    # from historical semantic memory.
+    #
+    # It is always available when --session-id
+    # identifies an active experiment.
+    if live_packet is not None:
+        packets.append(
+            live_packet
+        )
 
     # --------------------------------------------------
     # ROUTE 1:
@@ -1269,7 +1633,69 @@ def main():
 
     for packet in packets:
 
-        if "retrieved_intent" in packet:
+        if "live_session" in packet:
+
+            live = packet[
+                "live_session"
+            ]
+
+            current_navigation = (
+                live.get(
+                    "current_navigation"
+                )
+                or {}
+            )
+
+            print(
+                "- LIVE SESSION",
+                {
+                    "map":
+                        live.get("map"),
+
+                    "state":
+                        current_navigation.get(
+                            "state"
+                        ),
+
+                    "label":
+                        current_navigation.get(
+                            "label_name"
+                        ),
+                },
+            )
+        elif "current_map_metadata" in packet:
+
+            metadata = packet[
+                "current_map_metadata"
+            ]
+
+            print(
+                "- CURRENT MAP",
+                {
+                    "map":
+                        metadata.get(
+                            "map"
+                        ),
+
+                    "label_count":
+                        metadata.get(
+                            "label_count"
+                        ),
+
+                    "labels":
+                        [
+                            item.get(
+                                "name"
+                            )
+                            for item in metadata.get(
+                                "labels",
+                                []
+                            )
+                        ],
+                },
+            )
+
+        elif "retrieved_intent" in packet:
 
             occurrence = packet[
                 "retrieved_intent"
@@ -1293,7 +1719,7 @@ def main():
                 },
             )
 
-        else:
+        elif "retrieved_occurrence" in packet:
 
             occurrence = packet[
                 "retrieved_occurrence"
@@ -1307,6 +1733,12 @@ def main():
                 occurrence.get(
                     "indexed_outcome"
                 ),
+            )
+
+        else:
+
+            print(
+                "- UNKNOWN PACKET TYPE"
             )
 
     if args.show_evidence:
@@ -1344,6 +1776,7 @@ def main():
         global_hits,
         packets,
         args.audience,
+        live_packet,
     )
 
     answer = call_nemotron(

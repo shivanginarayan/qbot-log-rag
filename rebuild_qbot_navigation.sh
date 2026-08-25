@@ -6,7 +6,7 @@ REBUILD_REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REBUILD_NAV_DIR="$REBUILD_REPO_DIR/robot_navigation"
 REBUILD_QBOT_SETUP="$HOME/ros2/install/setup.bash"
 
-export ROS_DOMAIN_ID=57
+export ROS_DOMAIN_ID=63
 
 if [ ! -f /opt/ros/humble/setup.bash ]; then
     echo "ERROR: ROS Humble setup not found: /opt/ros/humble/setup.bash"

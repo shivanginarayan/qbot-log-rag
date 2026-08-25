@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import gzip
 import json
 import math
 import os
@@ -442,7 +443,7 @@ INDEX_HTML = r"""<!doctype html>
     }
     function syncSelection() { const label=activeLabel(), protectedLabel=isOrigin(label),locked=mappingIsActive()||state.deletingMap; editInput.disabled=locked||!label||protectedLabel; document.getElementById('renameBtn').disabled=locked||!label||protectedLabel; document.getElementById('deleteBtn').disabled=locked||!label||protectedLabel;document.getElementById('clearBtn').disabled=locked; editInput.value=label?label.name:''; }
     function markDirty() { state.dirty=true; updateSaveButton(); setStatus(`Unsaved label changes for ${state.mapName}`); }
-    async function fetchJson(url,options={}) { const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),15000),requestOptions={...options,signal:options.signal||controller.signal};try{const response=await fetch(url,requestOptions);let data;try{data=await response.json();}catch{data={error:`${response.status} ${response.statusText}`};}if(!response.ok)throw new Error(data.error||`${response.status} ${response.statusText}`);return data;}catch(error){if(error.name==='AbortError')throw new Error('The command request timed out; checking robot status.');throw error;}finally{clearTimeout(timer);} }
+    async function fetchJson(url,options={}) { const {timeoutMs=15000,...fetchOptions}=options,controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeoutMs),requestOptions={...fetchOptions,signal:fetchOptions.signal||controller.signal};try{const response=await fetch(url,requestOptions);let data;try{data=await response.json();}catch{data={error:`${response.status} ${response.statusText}`};}if(!response.ok)throw new Error(data.error||`${response.status} ${response.statusText}`);return data;}catch(error){if(error.name==='AbortError')throw new Error('The command request timed out; checking robot status.');throw error;}finally{clearTimeout(timer);} }
     function updateDeleteMapButton(){const navIdle=['stopped','error'].includes(state.navigation?.state),mappingIdle=['stopped','error'].includes(state.mapping?.state);const button=document.getElementById('deleteMapBtn');button.disabled=!state.mapName||!navIdle||!mappingIdle||state.saving||state.deletingMap;button.textContent=state.deletingMap?'Deleting…':'Delete Map';}
     function openDeleteMapDialog(){updateDeleteMapButton();if(document.getElementById('deleteMapBtn').disabled)return;document.getElementById('deleteMapMessage').textContent=`Type ${state.mapName} exactly. Its PGM, YAML, and labels JSON will be moved to recoverable trash.${state.dirty?' Unsaved label changes will be discarded.':''}`;deleteMapConfirmation.value='';deleteMapError.textContent='';deleteMapConfirmation.placeholder=state.mapName;deleteMapDialog.hidden=false;requestAnimationFrame(()=>deleteMapConfirmation.focus());}
     function closeDeleteMapDialog(){if(state.deletingMap)return;deleteMapDialog.hidden=true;deleteMapConfirmation.value='';deleteMapError.textContent='';}
@@ -455,9 +456,9 @@ INDEX_HTML = r"""<!doctype html>
       await loadMap(available?remembered:data.maps[0].name);
     }
     async function loadMap(name) {
-      setStatus(`Loading ${name}…`); const data=await fetchJson(`/api/map?name=${encodeURIComponent(name)}`);
+      setStatus(`Loading ${name}…`); const data=await fetchJson(`/api/map?name=${encodeURIComponent(name)}`,{timeoutMs:120000});
       Object.assign(state,{mapName:name,mapMeta:data.meta||{},labels:data.labels||[],selectedId:null,dirty:false,saving:false,viewingLiveMap:false,mappingPreviewRevision:0,mappingPreviewGeometry:null}); mapSelect.value=name;localStorage.setItem(selectedMapStorageKey,name);
-      const bytes=Uint8Array.from(atob(data.pixels),c=>c.charCodeAt(0)); state.mapPixels=bytes; const image=ctx.createImageData(data.width,data.height);
+      const decoded=atob(data.pixels),bytes=new Uint8Array(decoded.length);for(let i=0;i<decoded.length;i++)bytes[i]=decoded.charCodeAt(i);state.mapPixels=bytes; const image=ctx.createImageData(data.width,data.height);
       for(let i=0;i<bytes.length;i++){const j=i*4;image.data[j]=bytes[i];image.data[j+1]=bytes[i];image.data[j+2]=bytes[i];image.data[j+3]=255;}
       canvas.width=data.width;canvas.height=data.height;poseCanvas.width=data.width;poseCanvas.height=data.height;state.mapImage=image;fitMap();syncSelection();renderList();updateSaveButton();setStatus(`${name}: ${data.width} × ${data.height}, ${state.labels.length} saved labels`,'success');
       applyNavigationStatus(state.navigation);
@@ -2881,9 +2882,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def write_json(self, data: object, status: HTTPStatus = HTTPStatus.OK) -> None:
         body = json.dumps(data, indent=2).encode()
+        accepts_gzip = "gzip" in self.headers.get("Accept-Encoding", "").casefold()
+        use_gzip = accepts_gzip and len(body) >= 1024
+        if use_gzip:
+            body = gzip.compress(body, compresslevel=5)
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Vary", "Accept-Encoding")
+        if use_gzip:
+            self.send_header("Content-Encoding", "gzip")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)

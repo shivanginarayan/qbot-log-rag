@@ -22,7 +22,7 @@ Log-analysis repository:
 
 All navigation and localization testing uses:
 
-export ROS_DOMAIN_ID=57
+export ROS_DOMAIN_ID=63
 
 This prevents the navigation system from interacting with unrelated
 QBot ROS2 nodes running on other domains.

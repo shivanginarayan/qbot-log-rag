@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-
+import time
 import argparse
 import json
 import math
 import sqlite3
 import statistics
 from pathlib import Path
+import urllib.error
+import urllib.request
 
 
 REPO_DIR = Path(__file__).resolve().parents[2]
@@ -646,6 +648,663 @@ def build_packet(
 
     return packet
 
+def get_session_info(
+    conn,
+    session_id,
+):
+    row = conn.execute(
+        """
+        SELECT
+            started_at_ns,
+            ended_at_ns,
+            status,
+            map_name
+        FROM sessions
+        WHERE session_id = ?
+        """,
+        (session_id,),
+    ).fetchone()
+
+    if not row:
+        return None
+
+    return {
+        "started_at_ns":
+            row[0],
+
+        "ended_at_ns":
+            row[1],
+
+        "status":
+            row[2],
+
+        "map_name":
+            row[3],
+    }
+
+
+def get_live_navigation_state(
+    conn,
+):
+    """
+    Determine what navigation is doing RIGHT NOW
+    from recorded task events.
+
+    Important:
+    absence of FINISHED in a live session does NOT
+    mean interrupted.
+    """
+
+    rows = conn.execute(
+        """
+        SELECT
+            task_event_id,
+            event_time_ns,
+            event_type,
+            map_name,
+            label_id,
+            label_name,
+            task_type,
+            status,
+            payload_json
+        FROM task_events
+        ORDER BY event_time_ns
+        """
+    ).fetchall()
+
+    if not rows:
+        return {
+            "state":
+                "no_task_events_recorded"
+        }
+
+    latest_command = None
+
+    for row in reversed(rows):
+
+        if (
+            row[2] == "NAVIGATION_COMMAND"
+            and row[6]
+            == "navigate_to_location"
+        ):
+            latest_command = row
+            break
+
+    if latest_command is None:
+
+        latest_event = rows[-1]
+
+        return {
+            "state":
+                "no_navigation_request_recorded",
+
+            "latest_event": {
+                "event_time_ns":
+                    latest_event[1],
+
+                "event_type":
+                    latest_event[2],
+
+                "label_name":
+                    latest_event[5],
+
+                "task_type":
+                    latest_event[6],
+
+                "status":
+                    latest_event[7],
+            },
+        }
+
+    (
+        command_id,
+        command_time,
+        _,
+        command_map,
+        command_label_id,
+        command_label,
+        _,
+        _,
+        command_payload_json,
+    ) = latest_command
+
+    try:
+        command_payload = (
+            json.loads(
+                command_payload_json
+            )
+            if command_payload_json
+            else {}
+        )
+    except Exception:
+        command_payload = {}
+
+    started = None
+    finished = None
+
+    label_key = (
+        str(command_label or "")
+        .strip()
+        .casefold()
+    )
+
+    command_index = None
+
+    for i, row in enumerate(rows):
+        if row[0] == command_id:
+            command_index = i
+            break
+
+    if command_index is not None:
+
+        for later in rows[
+            command_index + 1:
+        ]:
+
+            (
+                later_id,
+                later_time,
+                later_type,
+                later_map,
+                later_label_id,
+                later_label,
+                later_task,
+                later_status,
+                later_payload_json,
+            ) = later
+
+            # A newer navigation request means
+            # this command is no longer the current one.
+            if (
+                later_type
+                == "NAVIGATION_COMMAND"
+                and later_task
+                == "navigate_to_location"
+            ):
+                break
+
+            later_label_key = (
+                str(
+                    later_label or ""
+                )
+                .strip()
+                .casefold()
+            )
+
+            if (
+                started is None
+                and later_type
+                == "NAVIGATION_STARTED"
+                and later_task
+                == "navigate_to_location"
+                and later_label_key
+                == label_key
+            ):
+                started = {
+                    "event_id":
+                        later_id,
+
+                    "event_time_ns":
+                        later_time,
+
+                    "map_name":
+                        later_map,
+
+                    "label_id":
+                        later_label_id,
+
+                    "label_name":
+                        later_label,
+
+                    "status":
+                        later_status,
+
+                    "payload_json":
+                        later_payload_json,
+                }
+
+            elif (
+                started is not None
+                and later_type
+                == "NAVIGATION_FINISHED"
+                and later_task
+                == "navigate_to_location"
+                and later_label_key
+                == label_key
+            ):
+                finished = {
+                    "event_id":
+                        later_id,
+
+                    "event_time_ns":
+                        later_time,
+
+                    "status":
+                        later_status,
+
+                    "payload_json":
+                        later_payload_json,
+                }
+
+                break
+
+    map_name = (
+        (
+            started.get(
+                "map_name"
+            )
+            if started
+            else None
+        )
+        or command_map
+        or command_payload.get("map")
+    )
+
+    result = {
+        "command_event_id":
+            command_id,
+
+        "command_time_ns":
+            command_time,
+
+        "map":
+            map_name,
+
+        "label_id":
+            (
+                (
+                    started.get(
+                        "label_id"
+                    )
+                    if started
+                    else None
+                )
+                or command_label_id
+            ),
+
+        "label_name":
+            command_label,
+
+        "execution_start_ns":
+            (
+                started[
+                    "event_time_ns"
+                ]
+                if started
+                else None
+            ),
+
+        "finish_ns":
+            (
+                finished[
+                    "event_time_ns"
+                ]
+                if finished
+                else None
+            ),
+
+        "final_status":
+            (
+                finished[
+                    "status"
+                ]
+                if finished
+                else None
+            ),
+    }
+
+    if finished is not None:
+
+        status = str(
+            finished.get(
+                "status"
+            )
+        )
+
+        if status == "4":
+            outcome = "succeeded"
+
+        elif status == "5":
+            outcome = "canceled"
+
+        elif status == "6":
+            outcome = "failed"
+
+        else:
+            outcome = "finished_unknown"
+
+        result[
+            "state"
+        ] = "navigation_finished"
+
+        result[
+            "outcome"
+        ] = outcome
+
+    elif started is not None:
+
+        result[
+            "state"
+        ] = "navigation_in_progress"
+
+        result[
+            "outcome"
+        ] = None
+
+    else:
+
+        # This is deliberately NOT called
+        # no_execution_start_recorded.
+        #
+        # The session is live and the start
+        # event could still arrive.
+        result[
+            "state"
+        ] = "navigation_requested_waiting_for_start"
+
+        result[
+            "outcome"
+        ] = None
+
+    return result
+
+def get_navigation_runtime_status():
+    """
+    Read the map-labeler's live navigation status.
+
+    This is runtime state, not historical evidence.
+    Failure to reach the endpoint should not prevent
+    SQLite evidence retrieval.
+    """
+
+    url = (
+        "http://localhost:8765"
+        "/api/navigation/status"
+    )
+
+    try:
+
+        request = urllib.request.Request(
+            url,
+            method="GET",
+        )
+
+        with urllib.request.urlopen(
+            request,
+            timeout=2.0,
+        ) as response:
+
+            payload = json.loads(
+                response.read().decode(
+                    "utf-8"
+                )
+            )
+
+        if not isinstance(
+            payload,
+            dict,
+        ):
+            return None
+
+        return {
+            "available":
+                True,
+
+            "state":
+                payload.get(
+                    "state"
+                ),
+
+            "active_map":
+                payload.get(
+                    "active_map"
+                ),
+
+            "ready":
+                payload.get(
+                    "ready"
+                ),
+
+            "message":
+                payload.get(
+                    "message"
+                ),
+
+            "ros_domain_id":
+                payload.get(
+                    "ros_domain_id"
+                ),
+
+            "localization_state":
+                payload.get(
+                    "localization_state"
+                ),
+
+            "localization_required":
+                payload.get(
+                    "localization_required"
+                ),
+
+            "localized":
+                payload.get(
+                    "localized"
+                ),
+
+            "localization_message":
+                payload.get(
+                    "localization_message"
+                ),
+        }
+
+    except Exception as exc:
+
+        return {
+            "available":
+                False,
+
+            "error":
+                str(exc),
+        }
+
+
+def build_live_packet(
+    session_id,
+    lookback_s=30.0,
+):
+    """
+    Build evidence representing what is happening
+    in the current session NOW.
+
+    If navigation is active/requested, evidence starts
+    at the command time so the whole current task is visible.
+
+    Otherwise use a short recent window.
+    """
+
+    db_path = (
+        RUNTIME_DIR
+        / f"session_{session_id}"
+        / "robot.db"
+    )
+
+    if not db_path.exists():
+        raise FileNotFoundError(
+            f"Database not found: {db_path}"
+        )
+
+    conn = sqlite3.connect(
+        db_path,
+        timeout=5.0,
+    )
+
+    session = get_session_info(
+        conn,
+        session_id,
+    )
+
+    if session is None:
+        conn.close()
+
+        raise ValueError(
+            f"Session not found: {session_id}"
+        )
+
+    live_state = (
+        get_live_navigation_state(
+            conn
+        )
+    )
+
+    runtime_status = (
+        get_navigation_runtime_status()
+    )
+
+    now_ns = time.time_ns()
+
+    session_start = int(
+        session[
+            "started_at_ns"
+        ]
+    )
+
+    command_time = (
+        live_state.get(
+            "command_time_ns"
+        )
+    )
+
+    state = live_state.get(
+        "state"
+    )
+
+    if (
+        state in {
+            "navigation_requested_waiting_for_start",
+            "navigation_in_progress",
+        }
+        and command_time is not None
+    ):
+
+        start_ns = int(
+            command_time
+        )
+
+    else:
+
+        lookback_ns = int(
+            lookback_s * 1e9
+        )
+
+        start_ns = max(
+            session_start,
+            now_ns - lookback_ns,
+        )
+
+    end_ns = now_ns
+
+    conn.close()
+
+    packet = build_packet(
+        session_id,
+        start_ns,
+        end_ns,
+    )
+
+    # --------------------------------------------------------
+    # Runtime map from browser/navigation backend
+    # --------------------------------------------------------
+
+    runtime_map = None
+
+    if (
+        runtime_status
+        and runtime_status.get(
+            "available"
+        )
+    ):
+        runtime_map = (
+            runtime_status.get(
+                "active_map"
+            )
+        )
+
+    # --------------------------------------------------------
+    # Map recorded in SQLite/task evidence
+    # --------------------------------------------------------
+
+    recorded_map = (
+        live_state.get(
+            "map"
+        )
+        or session.get(
+            "map_name"
+        )
+    )
+
+    # Runtime information is preferred for
+    # questions about the CURRENT robot state.
+    current_map = (
+        runtime_map
+        or recorded_map
+    )
+
+    packet[
+        "live_session"
+    ] = {
+        "is_live":
+            session[
+                "ended_at_ns"
+            ] is None,
+
+        "session_status":
+            session[
+                "status"
+            ],
+
+        "map":
+            current_map,
+
+        "map_sources": {
+            "runtime_navigation_status":
+                runtime_map,
+
+            "recorded_task_events_or_session":
+                recorded_map,
+        },
+
+        "navigation_runtime":
+            runtime_status,
+
+        "current_navigation":
+            live_state,
+
+        "evidence_generated_at_ns":
+            now_ns,
+    }
+
+    packet[
+        "grounding_notes"
+    ].append(
+        (
+            "This packet may represent an active "
+            "session. Missing completion events "
+            "must not be interpreted as failure "
+            "or interruption while the session "
+            "is still running."
+        )
+    )
+
+    packet[
+        "grounding_notes"
+    ].append(
+        (
+            "For current-map questions, the live "
+            "navigation runtime active_map is preferred "
+            "over historical map-memory retrieval."
+        )
+    )
+
+    return packet
 
 def main():
     parser = argparse.ArgumentParser()
