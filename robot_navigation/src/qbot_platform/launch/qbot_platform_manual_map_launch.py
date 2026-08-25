@@ -126,6 +126,8 @@ def generate_launch_description():
                 )
             },
             {"manual_drive_enabled": True},
+            {"cmd_vel_topic": "/cmd_vel"},
+            {"lb_state_topic": "/controller/lb_held"},
         ],
     )
     scan_filter = Node(

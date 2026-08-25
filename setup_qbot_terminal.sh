@@ -29,7 +29,7 @@ if [ ! -f "$QBOT_ENV_NAV_DIR/install/setup.bash" ]; then
     return 1
 fi
 
-export ROS_DOMAIN_ID=63
+export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-63}"
 source /opt/ros/humble/setup.bash
 source "$QBOT_ENV_DRIVER_SETUP"
 source "$QBOT_ENV_NAV_DIR/install/setup.bash"

@@ -1,0 +1,76 @@
+{
+  "map": "jafwa.pgm",
+  "yaml": "jafwa.yaml",
+  "labels": [
+    {
+      "id": "mapping-1-1",
+      "name": "label1",
+      "kind": "navigation",
+      "detail": "Dropped from the gamepad during mapping",
+      "source": "mapping_gamepad",
+      "world": {
+        "x": -0.7399999999999984,
+        "y": -0.1299999999999999
+      },
+      "yaw": -3.085331780207053,
+      "x": 946.0,
+      "y": 502.0
+    },
+    {
+      "id": "origin",
+      "name": "origin",
+      "kind": "navigation",
+      "detail": "Robot origin",
+      "source": "auto",
+      "x": 1020.0,
+      "y": 489.0,
+      "world": {
+        "x": 1.7763568394002505e-15,
+        "y": 0.0
+      },
+      "yaw": 0.0
+    },
+    {
+      "id": "mt8yzyrc-79fccdn",
+      "name": "another",
+      "kind": "navigation",
+      "detail": "",
+      "source": "browser",
+      "x": 446.0,
+      "y": 810.0,
+      "world": {
+        "x": -5.739999999999999,
+        "y": -3.2100000000000004
+      },
+      "yaw": 0.0
+    },
+    {
+      "id": "mt8zdl24-b9uyfug",
+      "name": "near",
+      "kind": "navigation",
+      "detail": "",
+      "source": "browser",
+      "x": 666.0,
+      "y": 619.0,
+      "world": {
+        "x": -3.539999999999999,
+        "y": -1.3000000000000007
+      },
+      "yaw": 0.0
+    },
+    {
+      "id": "mt8zeaks-pdkpn4q",
+      "name": "there",
+      "kind": "navigation",
+      "detail": "",
+      "source": "browser",
+      "x": 306.0,
+      "y": 645.0,
+      "world": {
+        "x": -7.139999999999999,
+        "y": -1.5600000000000005
+      },
+      "yaw": 0.0
+    }
+  ]
+}

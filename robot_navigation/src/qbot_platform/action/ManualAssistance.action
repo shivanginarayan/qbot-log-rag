@@ -1,0 +1,6 @@
+string reason
+---
+bool completed
+string message
+---
+string state

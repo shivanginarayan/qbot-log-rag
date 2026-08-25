@@ -74,8 +74,11 @@ adaptive_goal_tolerance:
     pose_topic: /amcl_pose
     controller_node: /controller_server
     goal_checker_id: general_goal_checker
-    precise_xy_tolerance: 0.10
-    normal_xy_tolerance: 0.25
+    precise_xy_tolerance: 0.15
+    # Keep at least one 5 cm costmap cell of tracking margin beyond the
+    # planner's 10 cm endpoint tolerance, with a modest covariance-dependent
+    # relaxation when AMCL confidence is lower.
+    normal_xy_tolerance: 0.20
     precise_enter_std_dev: 0.08
     precise_exit_std_dev: 0.12
     required_confident_samples: 3
@@ -143,6 +146,7 @@ bt_navigator:
       - nav2_assisted_teleop_cancel_bt_node
       - nav2_drive_on_heading_cancel_bt_node
       - nav2_is_battery_charging_condition_bt_node
+      - qbot_manual_assistance_action_bt_node
 
 bt_navigator_navigate_through_poses_rclcpp_node:
   ros__parameters:
@@ -155,55 +159,56 @@ bt_navigator_navigate_to_pose_rclcpp_node:
 controller_server:
   ros__parameters:
     controller_frequency: 10.0
-    costmap_update_timeout: 0.30
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.0
     min_theta_velocity_threshold: 0.001
-    failure_tolerance: 0.3
+    # Tolerate short MPPI optimizer misses before FollowPath fails and enters
+    # the autonomous recovery ladder.
+    failure_tolerance: 2.0
     progress_checker_plugins: ["progress_checker"]
-    goal_checker_plugins: ["general_goal_checker"] # "precise_goal_checker"
+    goal_checker_plugins: ["general_goal_checker"]
     controller_plugins: ["FollowPath"]
-    use_realtime_priority: true
 
     # Progress checker parameters
     progress_checker:
-      plugin: "nav2_controller::SimpleProgressChecker"
-      # Treat 0.15 m within 10 seconds as progress. The previous 100-second
-      # allowance delayed recovery for too long when the robot was pinned.
-      required_movement_radius: 0.15
-      movement_time_allowance: 10.0
+      plugin: "nav2_controller::PoseProgressChecker"
+      # Count final in-place heading corrections as real progress while still
+      # recovering after 20 seconds when neither translation nor rotation occurs.
+      required_movement_radius: 0.05
+      required_movement_angle: 0.10
+      movement_time_allowance: 20.0
     # Goal checker parameters
-    #precise_goal_checker:
-    #  plugin: "nav2_controller::SimpleGoalChecker"
-    #  xy_goal_tolerance: 0.25
-    #  yaw_goal_tolerance: 0.25
-    #  stateful: True
     general_goal_checker:
-      #stateful: True
-      stateful: False
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.25
-      yaw_goal_tolerance: 0.25
+      # Once the XY target has been reached, let the controller finish the
+      # requested heading without repeatedly dropping back into approach mode.
+      stateful: true
+      xy_goal_tolerance: 0.20
+      yaw_goal_tolerance: 0.35
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
-      time_steps: 75
+      # Keep the rollout inside the 3 x 3 m local costmap. The previous 7.5 s
+      # horizon extended well beyond known local costs and frequently left the
+      # optimizer without a valid trajectory.
+      time_steps: 30
       model_dt: 0.1
-      batch_size: 100
-      vx_std: 0.32
+      batch_size: 400
+      # Keep most samples away from the velocity clamps so MPPI retains a
+      # useful spread of forward and turning candidates.
+      vx_std: 0.22
       vy_std: 0.0
-      wz_std: 0.75
+      wz_std: 0.50
       vx_max: 0.38
       vx_min: 0.0
       vy_max: 0.0
-      wz_max: 0.75
+      wz_max: 0.85
       iteration_count: 1
-      prune_distance: 7.5
+      prune_distance: 1.5
       transform_tolerance: 0.1
       temperature: 0.3
       gamma: 0.015
       motion_model: "DiffDrive"
       visualize: false
-      regenerate_noises: true
       TrajectoryVisualizer:
         trajectory_step: 5
         time_step: 3
@@ -212,7 +217,7 @@ controller_server:
       critics: [
         "ConstraintCritic", "GoalCritic",
         "GoalAngleCritic", "PathAlignCritic", "PathFollowCritic",
-        "PathAngleCritic", "PreferForwardCritic"]
+        "PathAngleCritic", "PreferForwardCritic", "ObstaclesCritic"]
       ConstraintCritic:
         enabled: true
         cost_power: 1
@@ -255,6 +260,19 @@ controller_server:
         threshold_to_consider: 0.5
         max_angle_to_furthest: 1.0
         mode: 0
+      ObstaclesCritic:
+        enabled: true
+        cost_power: 1
+        critical_weight: 20.0
+        repulsion_weight: 1.5
+        consider_footprint: true
+        collision_cost: 1000000.0
+        collision_margin_distance: 0.10
+        near_goal_distance: 0.50
+        # These must match the local inflation layer so MPPI converts costs
+        # back to obstacle distances using the same model as the costmap.
+        inflation_radius: 0.60
+        cost_scaling_factor: 2.2
       # TwirlingCritic:
       #   enabled: true
       #   twirling_cost_power: 1
@@ -278,9 +296,9 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 2.2
-        # Keep the 0.35 m physical collision radius below, but use only a
-        # 0.15 m soft margin so the controller can use valid space near walls.
-        inflation_radius: 0.50
+        # Preserve the 0.35 m collision radius while trimming only 5 cm from
+        # the local soft padding, making valid passages a little less timid.
+        inflation_radius: 0.60
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True
@@ -338,8 +356,9 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 2.2
-        # A 0.30 m soft planning margin outside the 0.35 m robot radius.
-        inflation_radius: 0.65
+        # A modest reduction in global path-planning preference; obstacles
+        # inside the unchanged 0.35 m robot radius remain hard collisions.
+        inflation_radius: 0.75
       always_send_full_costmap: True
 
 map_saver:
@@ -352,12 +371,15 @@ map_saver:
 
 planner_server:
   ros__parameters:
-    expected_planner_frequency: 20.0
+    # The behavior trees request replanning at 1 Hz. Matching that rate avoids
+    # false planner-frequency warnings without slowing an individual plan.
+    expected_planner_frequency: 1.0
     planner_plugins: ["GridBased"]
-    costmap_update_timeout: 1.0
     GridBased:
+      # Restore the last known-stable normal planner after planner_server
+      # aborted during a full-stack recovery/replan.
       plugin: "nav2_navfn_planner/NavfnPlanner"
-      tolerance: 0.5
+      tolerance: 0.10
       use_astar: false
       allow_unknown: true
 
@@ -418,9 +440,9 @@ velocity_smoother:
     smoothing_frequency: 20.0
     scale_velocities: false
     feedback: "OPEN_LOOP"
-    max_velocity: [0.38, 0.0, 1.0]
+    max_velocity: [0.40, 0.0, 1.0]
     min_velocity: [0.0, 0.0, -1.0]
-    max_accel: [0.7, 0.0, 2.5]
+    max_accel: [0.8, 0.0, 2.5]
     max_decel: [-0.9, 0.0, -2.5]
     odom_topic: "odom"
     odom_duration: 0.1

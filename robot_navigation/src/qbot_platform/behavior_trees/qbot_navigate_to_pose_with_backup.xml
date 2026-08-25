@@ -1,51 +1,80 @@
 <!--
-  QBot NavigateToPose tree based on Nav2 Humble's
-  navigate_to_pose_w_replanning_and_recovery.xml.
+  QBot NavigateToPose tree.
 
-  The only intentional controller-recovery change is to clear the local
-  costmap and then try a short, slow BackUp when FollowPath fails. The behavior
-  server collision-checks the projected reverse motion; if rear clearance is
-  unavailable, navigation falls through to the standard system recoveries
-  instead of forcing the robot backward. Planner-only failures retain Nav2's
-  standard recovery order and therefore do not cause an immediate reverse.
+  Manual assistance is deliberately the last recovery step. A transient
+  planning or control failure first gets the standard contextual costmap
+  clears, followed by a clear/replan, wait/replan, spin/replan, and finally a
+  collision-checked backup plus one last replan. Only after that final retry
+  fails is the active goal paused for operator help.
 -->
 <root main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
-    <RecoveryNode number_of_retries="6" name="NavigateRecovery">
-      <PipelineSequence name="NavigateWithReplanning">
-        <RateController hz="1.0">
-          <RecoveryNode number_of_retries="1" name="ComputePathToPose">
-            <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
-            <ClearEntireCostmap
-              name="ClearGlobalCostmap-Context"
-              service_name="global_costmap/clear_entirely_global_costmap"/>
-          </RecoveryNode>
-        </RateController>
-        <RecoveryNode number_of_retries="1" name="FollowPath">
-          <FollowPath path="{path}" controller_id="FollowPath"/>
-          <Sequence name="FollowPathRecovery">
+    <RecoveryNode number_of_retries="1000000" name="NavigateRecovery">
+      <RecoveryNode number_of_retries="4" name="AutonomousRecoveryBeforeHelp">
+        <PipelineSequence name="NavigateWithReplanning">
+          <RateController hz="1.0">
+            <RecoveryNode number_of_retries="1" name="ComputePathToPose">
+              <!-- Keep a valid path for a few seconds instead of replacing it
+                   every tick. Replan immediately if it becomes invalid or the
+                   goal changes, and periodically to account for new costs. -->
+              <Fallback name="ReuseOrComputePathToPose">
+                <ReactiveSequence name="CheckIfNewPathIsNeeded">
+                  <Inverter>
+                    <PathExpiringTimer seconds="5" path="{path}"/>
+                  </Inverter>
+                  <Inverter>
+                    <GlobalUpdatedGoal/>
+                  </Inverter>
+                  <IsPathValid path="{path}"/>
+                </ReactiveSequence>
+                <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+              </Fallback>
+              <ClearEntireCostmap
+                name="ClearGlobalCostmap-Context"
+                service_name="global_costmap/clear_entirely_global_costmap"/>
+            </RecoveryNode>
+          </RateController>
+          <RecoveryNode number_of_retries="1" name="FollowPath">
+            <FollowPath path="{path}" controller_id="FollowPath"/>
             <ClearEntireCostmap
               name="ClearLocalCostmap-Context"
               service_name="local_costmap/clear_entirely_local_costmap"/>
-            <BackUp backup_dist="0.20" backup_speed="0.05"/>
-          </Sequence>
-        </RecoveryNode>
-      </PipelineSequence>
-      <ReactiveFallback name="RecoveryFallback">
+          </RecoveryNode>
+        </PipelineSequence>
+        <ReactiveFallback name="AutonomousRecoveryFallback">
+          <GoalUpdated/>
+          <RoundRobin name="AutonomousRecoveryActions">
+            <Sequence name="ClearCostmapsBeforeRetry">
+              <ClearEntireCostmap
+                name="ClearLocalCostmap-Subtree"
+                service_name="local_costmap/clear_entirely_local_costmap"/>
+              <ClearEntireCostmap
+                name="ClearGlobalCostmap-Subtree"
+                service_name="global_costmap/clear_entirely_global_costmap"/>
+            </Sequence>
+            <Wait wait_duration="3"/>
+            <Spin spin_dist="1.57"/>
+            <Sequence name="BackupBeforeFinalRetry">
+              <ClearEntireCostmap
+                name="ClearLocalCostmap-BeforeBackup"
+                service_name="local_costmap/clear_entirely_local_costmap"/>
+              <BackUp backup_dist="0.20" backup_speed="0.05"/>
+              <ClearEntireCostmap
+                name="ClearLocalCostmap-AfterBackup"
+                service_name="local_costmap/clear_entirely_local_costmap"/>
+              <ClearEntireCostmap
+                name="ClearGlobalCostmap-AfterBackup"
+                service_name="global_costmap/clear_entirely_global_costmap"/>
+            </Sequence>
+          </RoundRobin>
+        </ReactiveFallback>
+      </RecoveryNode>
+      <ReactiveFallback name="ManualRecoveryFallback">
         <GoalUpdated/>
-        <RoundRobin name="RecoveryActions">
-          <Sequence name="ClearingActions">
-            <ClearEntireCostmap
-              name="ClearLocalCostmap-Subtree"
-              service_name="local_costmap/clear_entirely_local_costmap"/>
-            <ClearEntireCostmap
-              name="ClearGlobalCostmap-Subtree"
-              service_name="global_costmap/clear_entirely_global_costmap"/>
-          </Sequence>
-          <Spin spin_dist="1.57"/>
-          <Wait wait_duration="5"/>
-          <BackUp backup_dist="0.30" backup_speed="0.05"/>
-        </RoundRobin>
+        <Sequence name="ManualHelpThenResume">
+          <ManualAssistance reason="Autonomous clear, wait, spin, backup, and final retry were exhausted. Hold LB and move into safe clear space."/>
+          <Wait wait_duration="1"/>
+        </Sequence>
       </ReactiveFallback>
     </RecoveryNode>
   </BehaviorTree>

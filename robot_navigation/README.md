@@ -116,6 +116,8 @@ starts the physical driver, filtered LiDAR, wheel odometry, Cartographer, live
 occupancy grid, and physical gamepad command node. Hold LB to enable motion and
 release LB to stop. The browser overlays Cartographer's live QBot pose. With LB
 released, press B to drop sequential labels at the current pose.
+**New Map** remains disabled until the previous process group has exited and
+two consecutive ROS graph checks confirm that the old robot stack is gone.
 
 Press **Finish & Save** when mapping is complete. The website validates and
 saves the full-resolution PGM/YAML pair and matching labels JSON under
@@ -124,14 +126,37 @@ Mapping** to stop without saving. Existing map names are never overwritten.
 Delete Map moves old map files into recoverable `.trash` storage. After
 starting navigation, Localize must complete before any Go command is accepted.
 
-Costmap inflation is configured at `0.50 m` locally and `0.65 m` globally while
+Costmap inflation is configured at `0.60 m` locally and `0.75 m` globally while
 the physical `robot_radius` remains `0.35 m`.
-The NavigateToPose behavior tree also treats less than `0.15 m` of movement in
-10 seconds as stalled while following a path. Its controller recovery clears
-the local costmap and requests a slow, collision-checked `0.20 m` reverse,
-followed by the standard system clear/spin/wait/replan sequence if backing up
-is unsafe or unsuccessful. This is progress-based recovery rather than
-physical bumper detection.
+The NavigateToPose controller uses a pose-aware progress checker: at least
+`0.05 m` of translation or `0.10 rad` of rotation within 20 seconds counts as
+progress. This prevents a valid final in-place turn from being mistaken for a
+stalled robot. Before requesting controller help, the behavior tree attempts
+contextual replanning, costmap clearing, a short wait, a collision-checked
+turn, a slow `0.20 m` reverse, and one final replan. This is progress-based
+recovery rather than physical bumper detection.
+Valid global paths are retained for five seconds (and replaced immediately if
+invalid or the goal changes), which reduces route churn from transient replans.
+The goal checker uses `0.15-0.20 m` adaptive XY tolerance and `0.35 rad` yaw
+tolerance, and browser navigation rejects
+non-origin labels whose centers are less than `0.35 m` from mapped occupied
+space. Navigation uses the physical QBot's stable NavFn planner. The website
+continuously checks the critical navigation nodes and tears down an unhealthy
+stack instead of leaving Go enabled after a planner or command node exits.
+
+If controller help is eventually requested, hold LB and move the QBot into
+clear space, then release LB. Collision-checked teleoperation stops, the
+costmaps are cleared, and the same NavigateToPose goal resumes automatically.
+
+The website's **Next localizer** selector can safely restart the selected map
+with AMCL or Cartographer. Cartographer is offered only when that map has a
+matching non-empty `.pbstream`; maps saved without one remain AMCL-only. AMCL
+localization performs its automatic scan, while Cartographer localization asks
+you to hold LB, drive or turn past distinctive features, and release LB so the
+tracked pose can be checked for stability.
+AMCL now also requires a fresh post-scan pose with position standard deviation
+at most `0.20 m` and yaw standard deviation at most `20 degrees`; a timed spin
+alone no longer unlocks navigation when the particle filter has not converged.
 
 The equivalent troubleshooting entrypoint is:
 
