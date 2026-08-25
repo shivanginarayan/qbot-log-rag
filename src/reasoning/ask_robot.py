@@ -15,6 +15,10 @@ from build_evidence_packet import (
     build_live_packet,
 )
 
+from generic_event_query import (
+    plan_and_query_events,
+)
+
 
 MODEL_EMBED = "bge-m3"
 
@@ -815,266 +819,99 @@ def intent_occurrence_packet(
     return packet
 
 
-# ============================================================
-# CURRENT MAP METADATA
-# ============================================================
+    # ========================================================
+    # CURRENT MAP / SAVED MAP METADATA
+    # ========================================================
 
-def normalize_map_name(
-    map_name,
-):
-    if not map_name:
-        return None
+    current_map_metadata = None
+    saved_maps_metadata = None
+    structured_event_query = None
 
-    name = Path(
-        str(map_name)
-    ).stem
 
-    if name.endswith(
-        "_labels"
+    # --------------------------------------------------------
+    # Current map comes from the live runtime packet
+    # when available.
+    # --------------------------------------------------------
+
+    if live_packet is not None:
+
+        live_info = (
+            live_packet.get(
+                "live_session"
+            )
+            or {}
+        )
+
+        current_map_name = (
+            live_info.get(
+                "map"
+            )
+        )
+
+        if current_map_name:
+
+            current_map_metadata = (
+                load_current_map_metadata(
+                    current_map_name
+                )
+            )
+
+
+    # --------------------------------------------------------
+    # Saved-map inventory is independent of the live session.
+    # It reads the actual maps directory.
+    # --------------------------------------------------------
+
+    if asks_about_saved_maps(
+        question
     ):
 
-        name = name[
-            :-len("_labels")
-        ]
-
-    return name
+        saved_maps_metadata = (
+            load_saved_maps_metadata()
+        )
 
 
-def load_current_map_metadata(
-    map_name,
-):
-    map_name = normalize_map_name(
-        map_name
-    )
-
-    if not map_name:
-        return None
-
-    labels_path = (
-        MAPS_DIR
-        / f"{map_name}_labels.json"
-    )
-
-    result = {
-        "map":
-            map_name,
-
-        "labels_file":
-            str(labels_path),
-
-        "labels_file_exists":
-            labels_path.exists(),
-
-        "label_count":
-            None,
-
-        "labels":
-            [],
-    }
-
-    if not labels_path.exists():
-        return result
+    # ========================================================
+    # GENERIC STRUCTURED EVENT QUERY
+    #
+    # This is intentionally NOT inside the live_packet block.
+    #
+    # It can search recorded task events across all sessions
+    # even if there is no active robot session.
+    # ========================================================
 
     try:
 
-        data = json.loads(
-            labels_path.read_text(
-                encoding="utf-8"
+        structured_event_query = (
+            plan_and_query_events(
+                question,
+                current_session_id=(
+                    args.session_id
+                ),
+                current_map=(
+                    current_map_name
+                ),
             )
         )
 
     except Exception as exc:
 
-        result[
-            "read_error"
-        ] = str(exc)
-
-        return result
-
-    labels = data.get(
-        "labels",
-        [],
-    )
-
-    if not isinstance(
-        labels,
-        list,
-    ):
-        labels = []
-
-    clean_labels = []
-
-    for label in labels:
-
-        if not isinstance(
-            label,
-            dict,
-        ):
-            continue
-
-        clean_labels.append(
-            {
-                "id":
-                    label.get("id"),
-
-                "name":
-                    label.get("name"),
-
-                "kind":
-                    label.get("kind"),
-
-                "detail":
-                    label.get("detail"),
-
-                "world":
-                    label.get("world"),
-
-                "yaw":
-                    label.get("yaw"),
-            }
+        print(
+            "WARNING: Structured event query "
+            "could not be completed:"
         )
 
-    result[
-        "labels"
-    ] = clean_labels
-
-    result[
-        "label_count"
-    ] = len(
-        clean_labels
-    )
-
-    return result
-
-def load_saved_maps_metadata():
-    """
-    Inspect the actual robot_navigation/maps directory.
-
-    A saved map may contain both:
-        <name>.pgm
-        <name>.yaml
-
-    Count each map name only once.
-    """
-
-    result = {
-        "maps_directory":
-            str(MAPS_DIR),
-
-        "directory_exists":
-            MAPS_DIR.exists(),
-
-        "map_count":
-            0,
-
-        "maps":
-            [],
-    }
-
-    if not MAPS_DIR.exists():
-        return result
-
-    discovered = {}
-
-    # --------------------------------------------------------
-    # Discover standard ROS occupancy-grid map files.
-    #
-    # Use both YAML and PGM so we do not accidentally miss
-    # a partially saved map, but deduplicate by map stem.
-    # --------------------------------------------------------
-
-    for path in MAPS_DIR.iterdir():
-
-        if not path.is_file():
-            continue
-
-        suffix = path.suffix.casefold()
-
-        if suffix not in {
-            ".pgm",
-            ".yaml",
-        }:
-            continue
-
-        map_name = path.stem
-
-        if not map_name:
-            continue
-
-        if map_name not in discovered:
-
-            discovered[
-                map_name
-            ] = {
-                "name":
-                    map_name,
-
-                "pgm":
-                    None,
-
-                "yaml":
-                    None,
-
-                "labels":
-                    None,
-            }
-
-        if suffix == ".pgm":
-
-            discovered[
-                map_name
-            ][
-                "pgm"
-            ] = str(path)
-
-        elif suffix == ".yaml":
-
-            discovered[
-                map_name
-            ][
-                "yaml"
-            ] = str(path)
-
-    # --------------------------------------------------------
-    # Attach label file if one exists.
-    # --------------------------------------------------------
-
-    for map_name, item in discovered.items():
-
-        labels_path = (
-            MAPS_DIR
-            / f"{map_name}_labels.json"
+        print(
+            f"  {exc}"
         )
 
-        if labels_path.exists():
+        structured_event_query = {
+            "used":
+                False,
 
-            item[
-                "labels"
-            ] = str(
-                labels_path
-            )
-
-    maps = sorted(
-        discovered.values(),
-        key=lambda item:
-            item["name"].casefold(),
-    )
-
-    result[
-        "maps"
-    ] = maps
-
-    result[
-        "map_count"
-    ] = len(
-        maps
-    )
-
-    return result
-
-# ============================================================
-# QUESTION ROUTING
-# ============================================================
+            "error":
+                str(exc),
+        }
 
 def asks_about_current_map(
     question,
@@ -1570,31 +1407,51 @@ GROUNDING RULES:
     is a causal explanation and must not be stated
     without corresponding evidence.
 
-    43. Distinguish an active map from saved maps.
+43. structured_event_query is the result of an exact
+    structured query over recorded task_events across
+    session databases.
 
-    navigation_runtime.active_map identifies the map
-    currently being used by navigation.
+44. When structured_event_query.plan.operation is "count",
+    use structured_event_query.result.count as the exact
+    number of matching recorded events.
 
-    It does not describe how many maps are saved.
+45. Do not replace an exact structured-event count with
+    an inference from live state, semantic similarity,
+    sensor sample counts, or historical behavior memory.
 
-44. For questions such as "how many maps are saved?",
-    "what maps are available?", or "list the saved maps",
-    use saved_maps_metadata.
+46. event_type matters.
 
-45. saved_maps_metadata is derived from the current
-    robot_navigation/maps directory.
+    LOCALIZE_COMMAND means a localization request was recorded.
 
-    map_count is the number of unique map names found
-    from .pgm or .yaml map files, deduplicated by name.
+    NAVIGATION_COMMAND means a navigation request was recorded.
 
-46. Do not infer the number of saved maps from the
-    currently active map.
+    NAVIGATION_STARTED means execution was recorded as started.
 
-    One active map does not mean only one map is saved.
+    NAVIGATION_FINISHED means a completion/result event was recorded.
 
-47. If saved_maps_metadata contains a map_count and map
-    list, use those values directly rather than historical
-    semantic memory.
+    Do not count STARTED and FINISHED as separate user requests.
+
+47. If the question asks how many times something was
+    requested or attempted, and the structured query filters
+    command events, answer using the command-event count.
+
+48. If the question asks how many times something succeeded,
+    failed, or completed, use matching completion/result events
+    rather than command count.
+
+49. A map assigned by map_source "current_runtime_map",
+    "session.map_name", or "nearest_map_event" is contextual
+    association. Preserve this distinction if it materially
+    affects confidence.
+
+50. If the structured query returns zero matches, say that
+    zero matching recorded events were found. Do not claim
+    the physical event definitely never occurred outside
+    the recorded evidence.
+
+51. structured_event_query has priority over fuzzy semantic
+    matches for exact counts, lists, grouping, and latest-event
+    questions.
 
 Answer the user's question directly.
 """.strip()
@@ -1719,6 +1576,7 @@ def main():
     # LIVE EVIDENCE
     # ========================================================
     live_packet = None
+    current_map_name = None
 
     if args.session_id:
 
@@ -1772,13 +1630,56 @@ def main():
                 )
             )
 
-        if asks_about_saved_maps(
-            question
-        ):
+        # ========================================================
+        # GENERIC STRUCTURED EVENT QUERY
+        #
+        # Nemotron interprets the natural-language question.
+        # Python performs the exact query/count over every
+        # recorded task_events table.
+        # ========================================================
 
-            saved_maps_metadata = (
-                load_saved_maps_metadata()
+        structured_event_query = None
+
+        try:
+
+            structured_event_query = (
+                plan_and_query_events(
+                    question,
+                    current_session_id=(
+                        args.session_id
+                    ),
+                    current_map=(
+                        current_map_name
+                    ),
+                )
             )
+
+        except Exception as exc:
+
+            print(
+                "WARNING: Structured event query "
+                "could not be completed:"
+            )
+
+            print(
+                f"  {exc}"
+            )
+
+            structured_event_query = {
+                "used":
+                    False,
+
+                "error":
+                    str(exc),
+            }
+
+            if asks_about_saved_maps(
+                question
+            ):
+
+                saved_maps_metadata = (
+                    load_saved_maps_metadata()
+                )
 
 
     # ========================================================
@@ -1820,9 +1721,29 @@ def main():
         )
     )
 
+    structured_query_used = bool(
+        structured_event_query
+        and structured_event_query.get(
+            "used"
+        )
+    )
+
+
+    # --------------------------------------------------------
+    # If the structured event engine can answer the
+    # question exactly, we do not need fuzzy historical
+    # semantic retrieval.
+    #
+    # For non-structured questions the existing semantic
+    # behavior-memory path remains available.
+    # --------------------------------------------------------
+
     use_historical_memory = (
-        not live_question
-        or historical_question
+        not structured_query_used
+        and (
+            not live_question
+            or historical_question
+        )
     )
 
 
@@ -1880,6 +1801,27 @@ def main():
     # ========================================================
 
     packets = []
+
+    # --------------------------------------------------------
+    # Generic structured task-event evidence
+    # --------------------------------------------------------
+
+    if (
+        structured_event_query
+        and structured_event_query.get(
+            "used"
+        )
+    ):
+
+        packets.append(
+            {
+                "structured_event_query":
+                    structured_event_query,
+
+                "source_type":
+                    "all_session_task_events",
+            }
+        )
 
     # --------------------------------------------------------
     # Saved map inventory
@@ -2105,7 +2047,57 @@ def main():
 
     for packet in packets:
 
-        if "saved_maps_metadata" in packet:
+        if "structured_event_query" in packet:
+
+            query_data = packet[
+                "structured_event_query"
+            ]
+
+            plan = (
+                query_data.get(
+                    "plan"
+                )
+                or {}
+            )
+
+            result = (
+                query_data.get(
+                    "result"
+                )
+                or {}
+            )
+
+            print(
+                "- STRUCTURED EVENT QUERY",
+                {
+                    "operation":
+                        plan.get(
+                            "operation"
+                        ),
+
+                    "scope":
+                        plan.get(
+                            "scope"
+                        ),
+
+                    "filters":
+                        plan.get(
+                            "filters"
+                        ),
+
+                    "matched_count":
+                        result.get(
+                            "matched_count"
+                        ),
+
+                    "count":
+                        result.get(
+                            "count"
+                        ),
+                },
+            )
+
+        elif "saved_maps_metadata" in packet:
 
             metadata = packet[
                 "saved_maps_metadata"
