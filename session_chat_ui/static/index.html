@@ -71,6 +71,29 @@
             <option value="user">Clear and concise</option>
             <option value="developer">Technical detail</option>
           </select>
+
+          <form id="apiKeyForm" class="api-key-form" autocomplete="off">
+            <label class="field-label" for="apiKey">NVIDIA API key</label>
+            <div class="api-key-row">
+              <input
+                id="apiKey"
+                class="text-input"
+                type="password"
+                maxlength="1024"
+                autocomplete="off"
+                autocapitalize="none"
+                spellcheck="false"
+                placeholder="nvapi-…"
+                aria-describedby="apiKeyState"
+              >
+              <button id="apiKeyButton" class="api-key-button" type="submit">Use key</button>
+            </div>
+          </form>
+          <div class="api-key-status-row">
+            <span id="apiKeyState" class="api-key-state">Not configured</span>
+            <button id="clearApiKey" class="clear-key-button" type="button" hidden>Remove</button>
+          </div>
+          <p class="api-key-privacy">Held in server memory only; never saved to the database or browser.</p>
         </div>
 
         <div class="storage-note">
@@ -83,20 +106,22 @@
 
       <section class="chat-panel" aria-label="QBot chat">
         <div id="messages" class="messages" aria-live="polite" aria-relevant="additions">
-          <article class="message assistant-message">
-            <div class="avatar" aria-hidden="true">QB</div>
-            <div class="message-body">
-              <div class="message-meta">QBot assistant</div>
-              <div class="bubble">
-                Ask me what the robot did, where it went, why a task failed, or what the current logs show.
+          <div id="conversation">
+            <article class="message assistant-message">
+              <div class="avatar" aria-hidden="true">QB</div>
+              <div class="message-body">
+                <div class="message-meta">QBot assistant</div>
+                <div class="bubble">
+                  Ask me what the robot did, where it went, why a task failed, or what the current logs show.
+                </div>
               </div>
-            </div>
-          </article>
+            </article>
 
-          <div class="suggestions" id="suggestions">
-            <button type="button" class="suggestion">What is the robot doing now?</button>
-            <button type="button" class="suggestion">Why did the last navigation fail?</button>
-            <button type="button" class="suggestion">Where is the robot currently?</button>
+            <div class="suggestions" id="suggestions">
+              <button type="button" class="suggestion">What is the robot doing now?</button>
+              <button type="button" class="suggestion">Why did the last navigation fail?</button>
+              <button type="button" class="suggestion">Where is the robot currently?</button>
+            </div>
           </div>
         </div>
 

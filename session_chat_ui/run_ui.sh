@@ -27,20 +27,9 @@ if ! "$QBOT_UI_PYTHON" -c 'import requests'; then
     exit 1
 fi
 
-if [ -z "${NVIDIA_API_KEY:-}" ]; then
-    if [ -t 0 ]; then
-        echo "NVIDIA_API_KEY is not set for this UI process."
-        read -rsp "Enter NVIDIA API key (input is hidden): " NVIDIA_API_KEY
-        echo
-        export NVIDIA_API_KEY
-    else
-        echo "WARNING: NVIDIA_API_KEY is not set; LLM questions will fail."
-    fi
-fi
-
 export PYTHONDONTWRITEBYTECODE=1
 
 echo "Starting the independent QBot session chat UI..."
-echo "The full experiment should be running in another terminal."
+echo "Enter the NVIDIA API key in the UI opened at localhost."
 
 exec "$QBOT_UI_PYTHON" -B "$UI_DIR/server.py" "$@"

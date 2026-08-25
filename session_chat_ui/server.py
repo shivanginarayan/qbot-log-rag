@@ -8,6 +8,7 @@ stores each exchange in the experiment session's robot.db database.
 """
 
 import argparse
+import ipaddress
 import json
 import os
 import re
@@ -40,6 +41,8 @@ MAX_REQUEST_BYTES = 32 * 1024
 MAX_USER_ID_LENGTH = 128
 MAX_QUESTION_LENGTH = 8000
 MAX_ERROR_LENGTH = 4000
+MAX_API_KEY_LENGTH = 1024
+MAX_HISTORY_ITEMS = 100
 
 
 class RagFailure(RuntimeError):
@@ -141,6 +144,13 @@ class SessionLocator:
         if self.fixed_session_id:
             return None
 
+        candidates = self.list_sessions()
+
+        return candidates[0] if candidates else None
+
+    def list_sessions(self):
+        """Return every readable experiment session, newest first."""
+
         candidates = []
         for database in self.runtime_dir.glob("session_*/robot.db"):
             session = self._read_session(database)
@@ -148,7 +158,7 @@ class SessionLocator:
                 candidates.append(session)
 
         if not candidates:
-            return None
+            return []
 
         candidates.sort(
             key=lambda item: (
@@ -157,7 +167,7 @@ class SessionLocator:
             ),
             reverse=True,
         )
-        return candidates[0]
+        return candidates
 
 
 class ChatStore:
@@ -318,6 +328,60 @@ class ChatStore:
             if connection is not None:
                 connection.close()
 
+    @staticmethod
+    def history(sessions, user_id, limit=MAX_HISTORY_ITEMS):
+        """Read one user's completed UI chats across experiment sessions."""
+
+        interactions = []
+
+        for session in sessions:
+            connection = None
+            try:
+                database_uri = "file:{}?mode=ro".format(session["database"])
+                connection = sqlite3.connect(
+                    database_uri, timeout=2, uri=True
+                )
+                connection.row_factory = sqlite3.Row
+                rows = connection.execute(
+                    """
+                    SELECT request_id, session_id, question, robot_response,
+                           status, audience, asked_at_ns, asked_at_iso,
+                           answered_at_iso, response_time_ms
+                    FROM ui_chat_interactions
+                    WHERE user_id = ?
+                      AND robot_response != ''
+                    ORDER BY asked_at_ns DESC
+                    LIMIT ?
+                    """,
+                    (user_id, int(limit)),
+                ).fetchall()
+            except (OSError, sqlite3.Error):
+                continue
+            finally:
+                if connection is not None:
+                    connection.close()
+
+            for row in rows:
+                interactions.append(
+                    {
+                        "request_id": str(row["request_id"]),
+                        "session_id": str(row["session_id"]),
+                        "question": str(row["question"]),
+                        "robot_response": str(row["robot_response"]),
+                        "status": str(row["status"]),
+                        "audience": str(row["audience"]),
+                        "asked_at_ns": int(row["asked_at_ns"] or 0),
+                        "asked_at_iso": str(row["asked_at_iso"] or ""),
+                        "answered_at_iso": str(row["answered_at_iso"] or ""),
+                        "response_time_ms": int(row["response_time_ms"] or 0),
+                    }
+                )
+
+        interactions.sort(key=lambda item: item["asked_at_ns"], reverse=True)
+        interactions = interactions[: int(limit)]
+        interactions.reverse()
+        return interactions
+
 
 class RagRunner:
     """Invoke the team's unchanged session-aware RAG command."""
@@ -331,11 +395,18 @@ class RagRunner:
         lines = [line.strip() for line in output.splitlines() if line.strip()]
         return lines[-1] if lines else ""
 
-    def answer(self, question, session_id, audience):
+    def answer(self, question, session_id, audience, api_key):
         if not self.script.is_file():
             raise RagFailure(
                 "The QBot RAG command is unavailable.",
                 "Missing file: " + str(self.script),
+            )
+
+        if not api_key:
+            raise RagFailure(
+                "Enter the NVIDIA API key in the QBot UI before asking a "
+                "question.",
+                "NVIDIA API key is not configured in the UI server memory.",
             )
 
         command = [
@@ -349,17 +420,24 @@ class RagRunner:
             question,
         ]
 
+        child_environment = os.environ.copy()
+        child_environment["NVIDIA_API_KEY"] = api_key
+
         try:
-            completed = subprocess.run(
-                command,
-                cwd=str(REPO_DIR),
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=self.timeout,
-                check=False,
-            )
+            try:
+                completed = subprocess.run(
+                    command,
+                    cwd=str(REPO_DIR),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=self.timeout,
+                    check=False,
+                    env=child_environment,
+                )
+            finally:
+                child_environment.pop("NVIDIA_API_KEY", None)
         except subprocess.TimeoutExpired as exc:
             raise RagFailure(
                 "The QBot assistant took too long to answer. Please try again.",
@@ -378,6 +456,7 @@ class RagRunner:
                     completed.returncode
                 )
             )
+            details = details.replace(api_key, "[REDACTED]")
             raise RagFailure(
                 "The QBot RAG pipeline could not answer this question.",
                 details,
@@ -408,11 +487,36 @@ class RagRunner:
 
 
 class ChatApplication:
-    def __init__(self, locator, store, runner, max_parallel_requests=2):
+    def __init__(
+        self,
+        locator,
+        store,
+        runner,
+        max_parallel_requests=2,
+        initial_api_key="",
+    ):
         self.locator = locator
         self.store = store
         self.runner = runner
         self.request_slots = threading.BoundedSemaphore(max_parallel_requests)
+        self._api_key_lock = threading.Lock()
+        self._api_key = initial_api_key.strip()
+
+    def set_api_key(self, api_key):
+        with self._api_key_lock:
+            self._api_key = api_key
+
+    def clear_api_key(self):
+        with self._api_key_lock:
+            self._api_key = ""
+
+    def get_api_key(self):
+        with self._api_key_lock:
+            return self._api_key
+
+    def has_api_key(self):
+        with self._api_key_lock:
+            return bool(self._api_key)
 
     @staticmethod
     def embedding_ready():
@@ -424,7 +528,7 @@ class ChatApplication:
 
     def status(self):
         session = self.locator.locate()
-        api_key_configured = bool(os.environ.get("NVIDIA_API_KEY", "").strip())
+        api_key_configured = self.has_api_key()
         embedding_ready = self.embedding_ready()
         rag_command_ready = ASK_ROBOT_SCRIPT.is_file()
         session_ready = session is not None
@@ -448,6 +552,9 @@ class ChatApplication:
             "stored_exchange_count": self.store.count(session) if session else 0,
             "model": NVIDIA_MODEL,
         }
+
+    def history(self, user_id):
+        return self.store.history(self.locator.list_sessions(), user_id)
 
 
 class ChatRequestHandler(BaseHTTPRequestHandler):
@@ -513,11 +620,47 @@ class ChatRequestHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
+    def _is_loopback_client(self):
+        try:
+            address = ipaddress.ip_address(self.client_address[0])
+            if address.is_loopback:
+                return True
+            return bool(
+                getattr(address, "ipv4_mapped", None)
+                and address.ipv4_mapped.is_loopback
+            )
+        except (ValueError, IndexError):
+            return False
+
+    def _read_json_payload(self):
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            content_length = 0
+
+        if content_length <= 0 or content_length > MAX_REQUEST_BYTES:
+            self._send_json(400, {"error": "Request body is empty or too large."})
+            return None
+
+        try:
+            payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            self._send_json(400, {"error": "Request body must be valid JSON."})
+            return None
+
+        if not isinstance(payload, dict):
+            self._send_json(400, {"error": "JSON body must be an object."})
+            return None
+
+        return payload
+
     def do_GET(self):
         path = urlsplit(self.path).path
 
         if path == "/api/status":
-            self._send_json(200, self.server.application.status())
+            status = self.server.application.status()
+            status["api_key_entry_allowed"] = self._is_loopback_client()
+            self._send_json(200, status)
             return
 
         if path == "/favicon.ico":
@@ -530,27 +673,20 @@ class ChatRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlsplit(self.path).path
+        if path == "/api/api-key":
+            self._handle_api_key()
+            return
+
+        if path == "/api/history":
+            self._handle_history()
+            return
+
         if path != "/api/chat":
             self._send_json(404, {"error": "Not found."})
             return
 
-        try:
-            content_length = int(self.headers.get("Content-Length", "0"))
-        except ValueError:
-            content_length = 0
-
-        if content_length <= 0 or content_length > MAX_REQUEST_BYTES:
-            self._send_json(400, {"error": "Request body is empty or too large."})
-            return
-
-        try:
-            payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            self._send_json(400, {"error": "Request body must be valid JSON."})
-            return
-
-        if not isinstance(payload, dict):
-            self._send_json(400, {"error": "JSON body must be an object."})
+        payload = self._read_json_payload()
+        if payload is None:
             return
 
         user_id = payload.get("user_id", "")
@@ -584,6 +720,19 @@ class ChatRequestHandler(BaseHTTPRequestHandler):
 
         if validation_error:
             self._send_json(400, {"error": validation_error})
+            return
+
+        api_key = self.server.application.get_api_key()
+        if not api_key:
+            self._send_json(
+                428,
+                {
+                    "error": (
+                        "Enter the NVIDIA API key in the QBot UI before "
+                        "asking a question."
+                    )
+                },
+            )
             return
 
         session = self.server.application.locator.locate()
@@ -637,7 +786,7 @@ class ChatRequestHandler(BaseHTTPRequestHandler):
 
             try:
                 result = self.server.application.runner.answer(
-                    question, session["session_id"], audience
+                    question, session["session_id"], audience, api_key
                 )
                 answer = result["answer"]
                 model = result["model"]
@@ -696,7 +845,109 @@ class ChatRequestHandler(BaseHTTPRequestHandler):
                 },
             )
         finally:
+            api_key = None
             self.server.application.request_slots.release()
+
+    def _handle_api_key(self):
+        if not self._is_loopback_client():
+            self._send_json(
+                403,
+                {
+                    "error": (
+                        "For security, enter the API key from a browser opened "
+                        "at http://localhost on the QBot itself."
+                    )
+                },
+            )
+            return
+
+        payload = self._read_json_payload()
+        if payload is None:
+            return
+
+        api_key = payload.get("api_key", "")
+        if not isinstance(api_key, str):
+            api_key = ""
+        api_key = api_key.strip()
+
+        if not api_key:
+            self._send_json(400, {"error": "NVIDIA API key is required."})
+            return
+        if len(api_key) > MAX_API_KEY_LENGTH:
+            self._send_json(400, {"error": "NVIDIA API key is too long."})
+            return
+        if any(character.isspace() for character in api_key):
+            self._send_json(
+                400, {"error": "NVIDIA API key cannot contain spaces."}
+            )
+            return
+
+        self.server.application.set_api_key(api_key)
+        payload.clear()
+        api_key = None
+        self._send_json(
+            200,
+            {
+                "configured": True,
+                "message": "API key is ready in memory for this UI session.",
+            },
+        )
+
+    def _handle_history(self):
+        payload = self._read_json_payload()
+        if payload is None:
+            return
+
+        user_id = payload.get("user_id", "")
+        if not isinstance(user_id, str):
+            user_id = ""
+        user_id = user_id.strip()
+
+        if not user_id:
+            self._send_json(400, {"error": "User ID is required."})
+            return
+        if len(user_id) > MAX_USER_ID_LENGTH:
+            self._send_json(400, {"error": "User ID is too long."})
+            return
+        if has_control_characters(user_id):
+            self._send_json(
+                400, {"error": "User ID contains invalid characters."}
+            )
+            return
+
+        interactions = self.server.application.history(user_id)
+        self._send_json(
+            200,
+            {
+                "user_id": user_id,
+                "count": len(interactions),
+                "interactions": interactions,
+            },
+        )
+
+    def do_DELETE(self):
+        path = urlsplit(self.path).path
+        if path != "/api/api-key":
+            self._send_json(404, {"error": "Not found."})
+            return
+
+        if not self._is_loopback_client():
+            self._send_json(
+                403,
+                {
+                    "error": (
+                        "For security, remove the API key from a browser opened "
+                        "at http://localhost on the QBot itself."
+                    )
+                },
+            )
+            return
+
+        self.server.application.clear_api_key()
+        self._send_json(
+            200,
+            {"configured": False, "message": "API key removed from memory."},
+        )
 
 
 def build_parser():
@@ -728,12 +979,17 @@ def build_parser():
 def main():
     args = build_parser().parse_args()
 
+    initial_api_key = os.environ.pop("NVIDIA_API_KEY", "").strip()
+    initial_api_key_loaded = bool(initial_api_key)
+
     locator = SessionLocator(fixed_session_id=args.session_id)
     application = ChatApplication(
         locator=locator,
         store=ChatStore(),
         runner=RagRunner(timeout=args.rag_timeout),
+        initial_api_key=initial_api_key,
     )
+    initial_api_key = None
 
     server = ThreadingHTTPServer((args.host, args.port), ChatRequestHandler)
     server.daemon_threads = True
@@ -755,8 +1011,13 @@ def main():
     else:
         print("Waiting for run_full_log_experiment.sh to create a session.")
 
-    if not os.environ.get("NVIDIA_API_KEY", "").strip():
-        print("WARNING: NVIDIA_API_KEY is not set for this UI process.")
+    if initial_api_key_loaded:
+        print("NVIDIA API key loaded into UI memory from the current environment.")
+    else:
+        print(
+            "Enter the NVIDIA API key from http://localhost:{} on the QBot; "
+            "it will remain only in UI server memory.".format(args.port)
+        )
 
     try:
         server.serve_forever()

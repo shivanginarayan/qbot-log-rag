@@ -2,9 +2,15 @@
 
 const chatForm = document.getElementById("chatForm");
 const messages = document.getElementById("messages");
+const conversation = document.getElementById("conversation");
 const questionInput = document.getElementById("question");
 const userIdInput = document.getElementById("userId");
 const audienceInput = document.getElementById("audience");
+const apiKeyForm = document.getElementById("apiKeyForm");
+const apiKeyInput = document.getElementById("apiKey");
+const apiKeyButton = document.getElementById("apiKeyButton");
+const apiKeyState = document.getElementById("apiKeyState");
+const clearApiKeyButton = document.getElementById("clearApiKey");
 const sendButton = document.getElementById("sendButton");
 const notice = document.getElementById("notice");
 const pipelineBadge = document.getElementById("pipelineBadge");
@@ -15,6 +21,14 @@ const mapName = document.getElementById("mapName");
 const storedCount = document.getElementById("storedCount");
 
 let requestInProgress = false;
+let statusLoaded = false;
+let apiKeyConfigured = false;
+let apiKeyEntryAllowed = false;
+let displayedHistoryUserId = "";
+let historyRequestNumber = 0;
+let historyLoadTimer = null;
+
+const emptyConversationMarkup = conversation.innerHTML;
 
 try {
   userIdInput.value = localStorage.getItem("qbot-session-user-id") || "";
@@ -29,6 +43,11 @@ function setNotice(message) {
 
 function scrollToLatest() {
   messages.scrollTop = messages.scrollHeight;
+}
+
+function resetConversation() {
+  conversation.innerHTML = emptyConversationMarkup;
+  messages.scrollTop = 0;
 }
 
 function initials(value) {
@@ -58,7 +77,7 @@ function addMessage(text, role, metaText, isError = false) {
 
   body.append(meta, bubble);
   article.append(avatar, body);
-  messages.appendChild(article);
+  conversation.appendChild(article);
   scrollToLatest();
   return article;
 }
@@ -89,7 +108,7 @@ function addThinkingMessage() {
 
   body.append(meta, bubble);
   article.append(avatar, body);
-  messages.appendChild(article);
+  conversation.appendChild(article);
   scrollToLatest();
   return article;
 }
@@ -97,6 +116,89 @@ function addThinkingMessage() {
 function resizeQuestion() {
   questionInput.style.height = "auto";
   questionInput.style.height = `${Math.min(questionInput.scrollHeight, 150)}px`;
+}
+
+function formatSavedTime(value) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "saved earlier";
+  return parsed.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+async function loadChatHistory(userId) {
+  const cleanUserId = userId.trim();
+  const requestNumber = ++historyRequestNumber;
+
+  if (!cleanUserId) {
+    displayedHistoryUserId = "";
+    resetConversation();
+    return false;
+  }
+
+  try {
+    const response = await fetch("/api/history", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+      body: JSON.stringify({ user_id: cleanUserId }),
+    });
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || "Saved chats could not be loaded.");
+    }
+
+    if (
+      requestNumber !== historyRequestNumber
+      || userIdInput.value.trim() !== cleanUserId
+    ) {
+      return false;
+    }
+
+    const interactions = Array.isArray(data.interactions)
+      ? data.interactions
+      : [];
+
+    conversation.replaceChildren();
+
+    if (interactions.length === 0) {
+      resetConversation();
+    } else {
+      const divider = document.createElement("div");
+      divider.className = "history-divider";
+      divider.textContent = `Saved history · ${interactions.length} chat${interactions.length === 1 ? "" : "s"}`;
+      conversation.appendChild(divider);
+
+      interactions.forEach((entry) => {
+        const savedTime = formatSavedTime(entry.asked_at_iso);
+        addMessage(entry.question || "", "user", `${cleanUserId} · ${savedTime}`);
+        addMessage(
+          entry.robot_response || "No saved response.",
+          "assistant",
+          `QBot assistant · ${savedTime} · saved`,
+          entry.status === "error",
+        );
+      });
+    }
+
+    displayedHistoryUserId = cleanUserId;
+    try {
+      localStorage.setItem("qbot-session-user-id", cleanUserId);
+    } catch (error) {
+      // Browser storage is optional.
+    }
+    scrollToLatest();
+    return true;
+  } catch (error) {
+    if (requestNumber === historyRequestNumber) {
+      setNotice(error.message || "Saved chats could not be loaded.");
+    }
+    return false;
+  }
 }
 
 async function refreshStatus() {
@@ -107,6 +209,9 @@ async function refreshStatus() {
     }
 
     const data = await response.json();
+    statusLoaded = true;
+    apiKeyConfigured = Boolean(data.api_key_configured);
+    apiKeyEntryAllowed = Boolean(data.api_key_entry_allowed);
     pipelineBadge.className = `pipeline-badge ${data.ready ? "ready" : "error"}`;
 
     if (data.ready) {
@@ -127,11 +232,93 @@ async function refreshStatus() {
     mapName.textContent = data.map_name || "Not recorded";
     mapName.title = data.map_name || "";
     storedCount.textContent = String(data.stored_exchange_count || 0);
+
+    apiKeyInput.disabled = !apiKeyEntryAllowed;
+    apiKeyButton.disabled = !apiKeyEntryAllowed;
+    clearApiKeyButton.hidden = !(apiKeyConfigured && apiKeyEntryAllowed);
+    apiKeyState.className = `api-key-state${apiKeyConfigured ? " configured" : ""}`;
+
+    if (apiKeyConfigured) {
+      apiKeyState.textContent = "Configured in memory";
+      apiKeyButton.textContent = "Replace";
+    } else if (apiKeyEntryAllowed) {
+      apiKeyState.textContent = "Not configured";
+      apiKeyButton.textContent = "Use key";
+    } else {
+      apiKeyState.textContent = "Enter at localhost:8766 on the QBot";
+      apiKeyButton.textContent = "Local only";
+    }
   } catch (error) {
+    statusLoaded = false;
     pipelineBadge.className = "pipeline-badge error";
     pipelineText.textContent = "UI server unavailable";
   }
 }
+
+apiKeyForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  let apiKey = apiKeyInput.value.trim();
+  if (!apiKey) {
+    setNotice("Enter your NVIDIA API key.");
+    apiKeyInput.focus();
+    return;
+  }
+
+  if (!apiKeyEntryAllowed) {
+    setNotice("Open http://localhost:8766 on the QBot itself to enter the API key.");
+    apiKeyInput.value = "";
+    apiKey = null;
+    return;
+  }
+
+  let requestBody = JSON.stringify({ api_key: apiKey });
+  apiKeyInput.value = "";
+  apiKey = null;
+  apiKeyButton.disabled = true;
+  setNotice("");
+
+  try {
+    const response = await fetch("/api/api-key", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+      body: requestBody,
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "The API key could not be configured.");
+    }
+    setNotice("NVIDIA API key is ready for this UI session only.");
+  } catch (error) {
+    setNotice(error.message || "The API key could not be configured.");
+  } finally {
+    requestBody = null;
+    await refreshStatus();
+  }
+});
+
+clearApiKeyButton.addEventListener("click", async () => {
+  clearApiKeyButton.disabled = true;
+  setNotice("");
+
+  try {
+    const response = await fetch("/api/api-key", {
+      method: "DELETE",
+      cache: "no-store",
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "The API key could not be removed.");
+    }
+    setNotice("NVIDIA API key was removed from server memory.");
+  } catch (error) {
+    setNotice(error.message || "The API key could not be removed.");
+  } finally {
+    clearApiKeyButton.disabled = false;
+    await refreshStatus();
+  }
+});
 
 questionInput.addEventListener("input", resizeQuestion);
 
@@ -142,12 +329,35 @@ questionInput.addEventListener("keydown", (event) => {
   }
 });
 
-document.querySelectorAll(".suggestion").forEach((button) => {
-  button.addEventListener("click", () => {
-    questionInput.value = button.textContent;
+messages.addEventListener("click", (event) => {
+  const button = event.target.closest(".suggestion");
+  if (button) {
+    questionInput.value = button.textContent || "";
     resizeQuestion();
     questionInput.focus();
-  });
+  }
+});
+
+userIdInput.addEventListener("input", () => {
+  clearTimeout(historyLoadTimer);
+  const userId = userIdInput.value.trim();
+
+  if (userId !== displayedHistoryUserId) {
+    displayedHistoryUserId = "";
+    resetConversation();
+  }
+
+  if (!userId) {
+    historyRequestNumber += 1;
+    return;
+  }
+
+  historyLoadTimer = setTimeout(() => loadChatHistory(userId), 500);
+});
+
+userIdInput.addEventListener("change", () => {
+  clearTimeout(historyLoadTimer);
+  loadChatHistory(userIdInput.value);
 });
 
 chatForm.addEventListener("submit", async (event) => {
@@ -167,6 +377,21 @@ chatForm.addEventListener("submit", async (event) => {
     setNotice("Enter a question for QBot.");
     questionInput.focus();
     return;
+  }
+
+  if (statusLoaded && !apiKeyConfigured) {
+    setNotice(
+      apiKeyEntryAllowed
+        ? "Enter the NVIDIA API key before sending a question."
+        : "Open http://localhost:8766 on the QBot to enter the NVIDIA API key.",
+    );
+    if (apiKeyEntryAllowed) apiKeyInput.focus();
+    return;
+  }
+
+  if (displayedHistoryUserId !== userId) {
+    clearTimeout(historyLoadTimer);
+    await loadChatHistory(userId);
   }
 
   setNotice("");
@@ -236,4 +461,7 @@ chatForm.addEventListener("submit", async (event) => {
 });
 
 refreshStatus();
+if (userIdInput.value.trim()) {
+  loadChatHistory(userIdInput.value);
+}
 setInterval(refreshStatus, 10000);

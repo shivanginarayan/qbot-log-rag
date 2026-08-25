@@ -12,6 +12,7 @@ set -u
 #
 # Starts:
 #   - browser map-label UI
+#   - browser RAG chat UI
 #   - evidence logging
 #   - rosbag
 #   - live robot-log Q&A
@@ -50,6 +51,8 @@ set -u
 REPO_DIR="$HOME/ENGR857_Narayan_Shivangi/project/qbot-log-rag"
 
 RUNTIME_DIR="$REPO_DIR/runtime_logs"
+
+CHAT_UI_PORT=8766
 
 
 cd "$REPO_DIR" || exit 1
@@ -380,6 +383,19 @@ cleanup_stale_experiment() {
     fi
 
 
+    if fuser "$CHAT_UI_PORT/tcp" \
+        >/dev/null 2>&1
+    then
+
+        echo "Stopping stale chat UI on port $CHAT_UI_PORT..."
+
+
+        fuser -k "$CHAT_UI_PORT/tcp" \
+            >/dev/null 2>&1 || true
+
+    fi
+
+
     # --------------------------------------------------------
     # Graceful stop
     # --------------------------------------------------------
@@ -430,6 +446,16 @@ cleanup_stale_experiment() {
     then
 
         fuser -k 8765/tcp \
+            >/dev/null 2>&1 || true
+
+    fi
+
+
+    if fuser "$CHAT_UI_PORT/tcp" \
+        >/dev/null 2>&1
+    then
+
+        fuser -k "$CHAT_UI_PORT/tcp" \
             >/dev/null 2>&1 || true
 
     fi
@@ -562,6 +588,8 @@ mkdir -p "$SESSION_DIR"
 GUI_LOG="$SESSION_DIR/map_labeler_console.log"
 
 EVIDENCE_LOG="$SESSION_DIR/evidence_logging_console.log"
+
+CHAT_UI_LOG="$SESSION_DIR/session_chat_ui_console.log"
 
 
 MAP_NAME=""
@@ -726,6 +754,8 @@ GUI_PID=""
 
 LOGGER_PID=""
 
+CHAT_UI_PID=""
+
 EXPERIMENT_FINISHED=0
 
 SESSION_ACTIVE=1
@@ -733,6 +763,99 @@ SESSION_ACTIVE=1
 MEMORY_FINALIZED=0
 
 AUDIENCE="user"
+
+
+# ============================================================
+# STOP RAG CHAT UI
+#
+# The chat UI remains available after /end so the completed
+# session can still be queried. It stops when this launcher exits.
+# ============================================================
+
+stop_chat_ui() {
+
+    if [ -z "${CHAT_UI_PID:-}" ]; then
+        return
+    fi
+
+
+    local chat_pgid
+
+
+    chat_pgid="$(
+        ps -o pgid= -p "$CHAT_UI_PID" \
+            2>/dev/null \
+            | tr -d ' '
+    )"
+
+
+    if valid_positive_integer "$chat_pgid"; then
+
+        echo
+        echo "Stopping browser RAG chat UI..."
+
+
+        kill -TERM \
+            -- "-$chat_pgid" \
+            2>/dev/null || true
+
+    else
+
+        kill -TERM \
+            "$CHAT_UI_PID" \
+            2>/dev/null || true
+
+    fi
+
+
+    local attempts=0
+
+
+    while kill -0 "$CHAT_UI_PID" \
+        2>/dev/null
+    do
+
+        attempts=$((attempts + 1))
+
+
+        if [ "$attempts" -ge 20 ]; then
+            break
+        fi
+
+
+        sleep 0.1
+
+    done
+
+
+    if kill -0 "$CHAT_UI_PID" \
+        2>/dev/null
+    then
+
+        if valid_positive_integer "$chat_pgid"; then
+
+            kill -KILL \
+                -- "-$chat_pgid" \
+                2>/dev/null || true
+
+        else
+
+            kill -KILL \
+                "$CHAT_UI_PID" \
+                2>/dev/null || true
+
+        fi
+
+    fi
+
+
+    wait "$CHAT_UI_PID" \
+        2>/dev/null || true
+
+
+    CHAT_UI_PID=""
+
+}
 
 
 # ============================================================
@@ -1151,6 +1274,8 @@ trap handle_interrupt INT TERM HUP
 
 final_exit_cleanup() {
 
+    stop_chat_ui
+
     if [ "$EXPERIMENT_FINISHED" -eq 0 ]; then
 
         echo
@@ -1286,6 +1411,94 @@ echo
 
 
 # ============================================================
+# START RAG CHAT UI
+# ============================================================
+
+echo
+echo "Starting browser RAG chat UI..."
+
+
+setsid \
+    ./session_chat_ui/run_ui.sh \
+    --port "$CHAT_UI_PORT" \
+    --session-id "$SESSION_ID" \
+    </dev/null \
+    >"$CHAT_UI_LOG" 2>&1 &
+
+
+CHAT_UI_PID=$!
+
+CHAT_UI_READY=0
+
+
+for _ in {1..30}
+do
+
+    if ! kill -0 "$CHAT_UI_PID" \
+        2>/dev/null
+    then
+        break
+    fi
+
+
+    if curl \
+        --fail \
+        --silent \
+        --show-error \
+        --max-time 2 \
+        "http://127.0.0.1:${CHAT_UI_PORT}/" \
+        >/dev/null 2>&1
+    then
+
+        CHAT_UI_READY=1
+
+        break
+
+    fi
+
+
+    sleep 0.5
+
+done
+
+
+if [ "$CHAT_UI_READY" -ne 1 ]; then
+
+    echo
+    echo "Browser RAG chat UI did not start."
+    echo
+    echo "See:"
+    echo "  $CHAT_UI_LOG"
+
+
+    cleanup_processes
+
+    close_session
+
+    EXPERIMENT_FINISHED=1
+
+    SESSION_ACTIVE=0
+
+    exit 1
+
+fi
+
+
+echo
+echo "Browser RAG chat UI running."
+echo
+echo "Open on this QBot to enter the NVIDIA API key securely:"
+echo "  http://localhost:${CHAT_UI_PORT}"
+echo
+echo "After the key is configured, the chat is also available at:"
+echo "  http://${ROBOT_IP}:${CHAT_UI_PORT}"
+echo
+echo "Chat UI log:"
+echo "  $CHAT_UI_LOG"
+echo
+
+
+# ============================================================
 # LIVE SESSION
 # ============================================================
 
@@ -1296,6 +1509,9 @@ echo "============================================================"
 echo
 echo "Browser UI:"
 echo "  http://${ROBOT_IP}:8765"
+echo
+echo "RAG chat UI:"
+echo "  http://localhost:${CHAT_UI_PORT}"
 echo
 echo "Evidence logging:"
 echo "  ACTIVE"
