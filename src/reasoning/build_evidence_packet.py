@@ -8,7 +8,9 @@ import statistics
 from pathlib import Path
 import urllib.error
 import urllib.request
-
+from live_ros_status import (
+    collect_ros_runtime,
+)
 
 REPO_DIR = Path(__file__).resolve().parents[2]
 RUNTIME_DIR = REPO_DIR / "runtime_logs"
@@ -1159,6 +1161,10 @@ def build_live_packet(
         get_navigation_runtime_status()
     )
 
+    ros_runtime = (
+        collect_ros_runtime()
+    )
+
     now_ns = time.time_ns()
 
     session_start = int(
@@ -1263,6 +1269,9 @@ def build_live_packet(
 
         "map":
             current_map,
+
+        "ros_runtime":
+            ros_runtime,
 
         "map_sources": {
             "runtime_navigation_status":
