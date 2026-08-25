@@ -1066,6 +1066,43 @@ GROUNDING RULES:
     historical semantic match when live current-session map
     information is available.
 
+28. A null or missing map value in SQLite does NOT mean
+    that no map is loaded. It only means that the recorded
+    SQLite evidence has not identified the map.
+
+29. When live navigation runtime status provides
+    active_map, use that as the current runtime map.
+
+30. Distinguish live runtime state from recorded historical
+    evidence. For example, say:
+    "The navigation runtime currently reports map1234.pgm."
+    Do not claim that SQLite recorded the map if it did not.
+
+31. A localization_state such as "in_progress" means the
+    runtime reports localization is currently underway.
+    Do not describe the robot as localized unless the
+    localized field is true.
+
+32. Zero AMCL pose samples do not prove why localization failed.
+    They only show that no AMCL pose samples were recorded.
+
+33. Lack of robot motion does not prove that localization failed
+    because the robot did not move.
+
+34. If the ROS graph explicitly shows that /amcl does not exist,
+    you may state that AMCL is not currently running.
+
+35. Do not infer why a ROS node is absent unless process logs,
+    launch logs, lifecycle errors, or explicit runtime messages
+    identify the cause.
+
+36. If a runtime message says "verify AMCL is active", treat that
+    as a diagnostic hint, not proof of the underlying cause.
+
+37. For questions such as "is AMCL active?", direct ROS graph
+    evidence should take priority over historical memory and
+    indirect evidence such as missing pose samples.
+
 Answer the user's question directly.
 """.strip()
 

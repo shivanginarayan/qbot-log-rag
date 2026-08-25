@@ -6,6 +6,8 @@ import math
 import sqlite3
 import statistics
 from pathlib import Path
+import urllib.error
+import urllib.request
 
 
 REPO_DIR = Path(__file__).resolve().parents[2]
@@ -1006,6 +1008,104 @@ def get_live_navigation_state(
 
     return result
 
+def get_navigation_runtime_status():
+    """
+    Read the map-labeler's live navigation status.
+
+    This is runtime state, not historical evidence.
+    Failure to reach the endpoint should not prevent
+    SQLite evidence retrieval.
+    """
+
+    url = (
+        "http://localhost:8765"
+        "/api/navigation/status"
+    )
+
+    try:
+
+        request = urllib.request.Request(
+            url,
+            method="GET",
+        )
+
+        with urllib.request.urlopen(
+            request,
+            timeout=2.0,
+        ) as response:
+
+            payload = json.loads(
+                response.read().decode(
+                    "utf-8"
+                )
+            )
+
+        if not isinstance(
+            payload,
+            dict,
+        ):
+            return None
+
+        return {
+            "available":
+                True,
+
+            "state":
+                payload.get(
+                    "state"
+                ),
+
+            "active_map":
+                payload.get(
+                    "active_map"
+                ),
+
+            "ready":
+                payload.get(
+                    "ready"
+                ),
+
+            "message":
+                payload.get(
+                    "message"
+                ),
+
+            "ros_domain_id":
+                payload.get(
+                    "ros_domain_id"
+                ),
+
+            "localization_state":
+                payload.get(
+                    "localization_state"
+                ),
+
+            "localization_required":
+                payload.get(
+                    "localization_required"
+                ),
+
+            "localized":
+                payload.get(
+                    "localized"
+                ),
+
+            "localization_message":
+                payload.get(
+                    "localization_message"
+                ),
+        }
+
+    except Exception as exc:
+
+        return {
+            "available":
+                False,
+
+            "error":
+                str(exc),
+        }
+
 
 def build_live_packet(
     session_id,
@@ -1055,6 +1155,10 @@ def build_live_packet(
         )
     )
 
+    runtime_status = (
+        get_navigation_runtime_status()
+    )
+
     now_ns = time.time_ns()
 
     session_start = int(
@@ -1073,10 +1177,13 @@ def build_live_packet(
         "state"
     )
 
-    if state in {
-        "navigation_requested_waiting_for_start",
-        "navigation_in_progress",
-    } and command_time is not None:
+    if (
+        state in {
+            "navigation_requested_waiting_for_start",
+            "navigation_in_progress",
+        }
+        and command_time is not None
+    ):
 
         start_ns = int(
             command_time
@@ -1103,6 +1210,44 @@ def build_live_packet(
         end_ns,
     )
 
+    # --------------------------------------------------------
+    # Runtime map from browser/navigation backend
+    # --------------------------------------------------------
+
+    runtime_map = None
+
+    if (
+        runtime_status
+        and runtime_status.get(
+            "available"
+        )
+    ):
+        runtime_map = (
+            runtime_status.get(
+                "active_map"
+            )
+        )
+
+    # --------------------------------------------------------
+    # Map recorded in SQLite/task evidence
+    # --------------------------------------------------------
+
+    recorded_map = (
+        live_state.get(
+            "map"
+        )
+        or session.get(
+            "map_name"
+        )
+    )
+
+    # Runtime information is preferred for
+    # questions about the CURRENT robot state.
+    current_map = (
+        runtime_map
+        or recorded_map
+    )
+
     packet[
         "live_session"
     ] = {
@@ -1117,14 +1262,18 @@ def build_live_packet(
             ],
 
         "map":
-            (
-                live_state.get(
-                    "map"
-                )
-                or session.get(
-                    "map_name"
-                )
-            ),
+            current_map,
+
+        "map_sources": {
+            "runtime_navigation_status":
+                runtime_map,
+
+            "recorded_task_events_or_session":
+                recorded_map,
+        },
+
+        "navigation_runtime":
+            runtime_status,
 
         "current_navigation":
             live_state,
@@ -1142,6 +1291,16 @@ def build_live_packet(
             "must not be interpreted as failure "
             "or interruption while the session "
             "is still running."
+        )
+    )
+
+    packet[
+        "grounding_notes"
+    ].append(
+        (
+            "For current-map questions, the live "
+            "navigation runtime active_map is preferred "
+            "over historical map-memory retrieval."
         )
     )
 
