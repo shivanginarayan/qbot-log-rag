@@ -6,7 +6,10 @@ import sqlite3
 from pathlib import Path
 
 import requests
-
+from task_timeline import (
+    build_task_lifecycles,
+    compact_lifecycle,
+)
 
 REPO_DIR = Path(__file__).resolve().parents[2]
 
@@ -1047,6 +1050,176 @@ def compact_event(
             ),
     }
 
+# ============================================================
+# TASK LIFECYCLE HELPERS
+# ============================================================
+
+def build_lifecycles_by_session(
+    events,
+):
+    """
+    Build task lifecycles separately inside each session.
+
+    This prevents a command from one experiment from being
+    accidentally paired with STARTED/FINISHED events from
+    another experiment.
+    """
+
+    events_by_session = {}
+
+    for event in events:
+
+        session_id = event.get(
+            "session_id"
+        )
+
+        if not session_id:
+            continue
+
+        events_by_session.setdefault(
+            session_id,
+            []
+        ).append(
+            event
+        )
+
+    lifecycles = []
+
+    for session_id, session_events in (
+        events_by_session.items()
+    ):
+
+        session_events.sort(
+            key=lambda event:
+                event.get(
+                    "event_time_ns",
+                    0,
+                )
+        )
+
+        try:
+
+            lifecycles.extend(
+                build_task_lifecycles(
+                    session_events
+                )
+            )
+
+        except Exception as exc:
+
+            print(
+                "WARNING: Could not build "
+                f"task lifecycle for session "
+                f"{session_id}: {exc}"
+            )
+
+    return lifecycles
+
+
+def lifecycle_contains_event(
+    lifecycle,
+    event,
+):
+    """
+    Return True if an event belongs to this lifecycle.
+
+    Checks:
+        command
+        execution_started
+        completion
+        status_events
+    """
+
+    event_session = event.get(
+        "session_id"
+    )
+
+    event_id = event.get(
+        "task_event_id"
+    )
+
+    if event_id is None:
+        return False
+
+    command = (
+        lifecycle.get(
+            "command"
+        )
+        or {}
+    )
+
+    # Never connect events across sessions.
+    if (
+        command.get(
+            "session_id"
+        )
+        != event_session
+    ):
+        return False
+
+    candidates = []
+
+    candidates.append(
+        command
+    )
+
+    started = lifecycle.get(
+        "execution_started"
+    )
+
+    if started:
+        candidates.append(
+            started
+        )
+
+    completion = lifecycle.get(
+        "completion"
+    )
+
+    if completion:
+        candidates.append(
+            completion
+        )
+
+    candidates.extend(
+        lifecycle.get(
+            "status_events",
+            []
+        )
+        or []
+    )
+
+    for candidate in candidates:
+
+        if (
+            candidate.get(
+                "task_event_id"
+            )
+            == event_id
+        ):
+            return True
+
+    return False
+
+
+def find_lifecycle_for_event(
+    lifecycles,
+    event,
+):
+    """
+    Find the request → start → finish lifecycle
+    containing a particular event.
+    """
+
+    for lifecycle in lifecycles:
+
+        if lifecycle_contains_event(
+            lifecycle,
+            event,
+        ):
+            return lifecycle
+
+    return None
 
 def execute_plan(
     events,
@@ -1085,9 +1258,20 @@ def execute_plan(
             ),
     }
 
+    # ========================================================
+    # COUNT
+    #
+    # Exact structured event count.
+    #
+    # Do NOT replace this with lifecycle counting.
+    # Example:
+    #
+    # COUNT LOCALIZE_COMMAND
+    # = number of recorded localization requests.
+    # ========================================================
+
     if operation == "count":
 
-        # Count is exact over matching structured events.
         result[
             "count"
         ] = len(
@@ -1106,25 +1290,12 @@ def execute_plan(
 
         return result
 
-    if operation == "latest":
 
-        latest = (
-            matched[-1]
-            if matched
-            else None
-        )
-
-        result[
-            "latest_event"
-        ] = (
-            compact_event(
-                latest
-            )
-            if latest
-            else None
-        )
-
-        return result
+    # ========================================================
+    # GROUP COUNT
+    #
+    # Also remains exact structured-event aggregation.
+    # ========================================================
 
     if operation == "group_count":
 
@@ -1177,12 +1348,86 @@ def execute_plan(
 
         return result
 
-    # Default/list
+
+    # ========================================================
+    # Build task lifecycles only when an operation needs
+    # relationship/context.
+    #
+    # This keeps COUNT/GROUP_COUNT simple and exact.
+    # ========================================================
+
+    lifecycles = (
+        build_lifecycles_by_session(
+            events
+        )
+    )
+
+
+    # ========================================================
+    # LATEST
+    #
+    # Return the latest matching event PLUS its complete
+    # command → start → finish lifecycle when available.
+    # ========================================================
+
+    if operation == "latest":
+
+        latest = (
+            matched[-1]
+            if matched
+            else None
+        )
+
+        result[
+            "latest_event"
+        ] = (
+            compact_event(
+                latest
+            )
+            if latest
+            else None
+        )
+
+        if latest:
+
+            lifecycle = (
+                find_lifecycle_for_event(
+                    lifecycles,
+                    latest,
+                )
+            )
+
+            if lifecycle:
+
+                result[
+                    "task_lifecycle"
+                ] = (
+                    compact_lifecycle(
+                        lifecycle
+                    )
+                )
+
+        return result
+
+
+    # ========================================================
+    # LIST
+    #
+    # Return matching events.
+    #
+    # If any matching event belongs to a task lifecycle,
+    # attach that lifecycle as additional context.
+    # ========================================================
+
     limit = int(
         plan.get(
             "limit",
             20,
         )
+    )
+
+    selected_events = (
+        matched[-limit:]
     )
 
     result[
@@ -1192,8 +1437,65 @@ def execute_plan(
             event
         )
         for event
-        in matched[-limit:]
+        in selected_events
     ]
+
+
+    related_lifecycles = []
+
+    seen_lifecycles = set()
+
+
+    for event in selected_events:
+
+        lifecycle = (
+            find_lifecycle_for_event(
+                lifecycles,
+                event,
+            )
+        )
+
+        if not lifecycle:
+            continue
+
+        command = (
+            lifecycle.get(
+                "command"
+            )
+            or {}
+        )
+
+        lifecycle_key = (
+            command.get(
+                "session_id"
+            ),
+            command.get(
+                "task_event_id"
+            ),
+        )
+
+        if lifecycle_key in seen_lifecycles:
+            continue
+
+        seen_lifecycles.add(
+            lifecycle_key
+        )
+
+        related_lifecycles.append(
+            compact_lifecycle(
+                lifecycle
+            )
+        )
+
+
+    if related_lifecycles:
+
+        result[
+            "task_lifecycles"
+        ] = (
+            related_lifecycles
+        )
+
 
     return result
 

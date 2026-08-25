@@ -1453,6 +1453,38 @@ GROUNDING RULES:
     matches for exact counts, lists, grouping, and latest-event
     questions.
 
+52. task_lifecycle links a recorded command to later
+    execution-start and completion events for the same task.
+
+53. When task_lifecycle is available, use it to distinguish:
+
+    request recorded,
+    execution started,
+    execution completed,
+    final outcome.
+
+54. If task_lifecycle.outcome is
+    "no_execution_start_recorded", say that no matching
+    execution-start event was recorded for that request.
+
+    Do not claim the subsystem definitely never received
+    the request unless direct evidence proves that.
+
+55. If task_lifecycle.outcome is
+    "started_no_completion_recorded", say execution started
+    but no matching completion event was recorded.
+
+    In an active session, do not automatically call this
+    interrupted or failed.
+
+56. If task_lifecycle has a completion and outcome,
+    use the recorded completion outcome when answering
+    what happened to that request.
+
+57. A task lifecycle establishes temporal/event relationship,
+    not root cause. STARTED followed by FINISHED failed does
+    not by itself explain why the task failed.
+
 Answer the user's question directly.
 """.strip()
 
