@@ -22,6 +22,24 @@ set -u
 #   /status
 #   /end
 #   exit
+#
+# Cleanup policy:
+#
+#   We DO stop experiment-created:
+#     - browser UI
+#     - evidence loggers
+#     - rosbag
+#     - mapping/navigation
+#     - Nav2
+#     - AMCL
+#     - Cartographer
+#     - QBot ROS interface/support nodes
+#
+#   We DO NOT stop:
+#
+#     qbot_platform_driver_physical
+#
+#   That is treated as the persistent physical robot driver.
 # ============================================================
 
 
@@ -47,7 +65,7 @@ fi
 
 
 # ============================================================
-# ROS DOMAIN
+# ROS
 # ============================================================
 
 export ROS_DOMAIN_ID=57
@@ -58,10 +76,398 @@ echo "Using ROS_DOMAIN_ID=$ROS_DOMAIN_ID"
 
 
 # ============================================================
+# BASIC HELPERS
+# ============================================================
+
+valid_positive_integer() {
+
+    [[ "${1:-}" =~ ^[1-9][0-9]*$ ]]
+
+}
+
+
+# ============================================================
+# KILL PIDS MATCHING ONE SAFE PATTERN
+#
+# Only processes owned by the current user are targeted.
+#
+# This automatically protects the root-owned persistent:
+#
+#   qbot_platform_driver_physical
+# ============================================================
+
+signal_user_processes_matching() {
+
+    local signal_name="$1"
+
+    local pattern="$2"
+
+    local pids
+
+
+    pids="$(
+        pgrep \
+            -u "$UID" \
+            -f "$pattern" \
+            2>/dev/null || true
+    )"
+
+
+    while read -r pid
+    do
+
+        if [ -z "$pid" ]; then
+            continue
+        fi
+
+
+        if ! valid_positive_integer "$pid"; then
+            continue
+        fi
+
+
+        # Never signal this launcher.
+
+        if [ "$pid" = "$$" ]; then
+            continue
+        fi
+
+
+        # Never signal the shell that launched us.
+
+        if [ "$pid" = "$PPID" ]; then
+            continue
+        fi
+
+
+        kill \
+            "-$signal_name" \
+            "$pid" \
+            2>/dev/null || true
+
+
+    done <<< "$pids"
+
+}
+
+
+# ============================================================
+# PROJECT RUNTIME PROCESS PATTERNS
+#
+# These are the detached processes we have actually observed
+# surviving previous experiments.
+#
+# IMPORTANT:
+#
+# qbot_platform_driver_physical is NOT listed.
+# ============================================================
+
+signal_project_runtime_nodes() {
+
+    local signal_name="$1"
+
+
+    # --------------------------------------------------------
+    # QBot support/interface nodes
+    # --------------------------------------------------------
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'robot_navigation/install/qbot_platform/lib/qbot_platform/lidar([[:space:]]|$)'
+
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'robot_navigation/install/qbot_platform/lib/qbot_platform/fixed_lidar_frame([[:space:]]|$)'
+
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'robot_navigation/install/qbot_platform/lib/qbot_platform/wheel_odometry\.py([[:space:]]|$)'
+
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'robot_navigation/install/qbot_platform/lib/qbot_platform/scan_wedge_filter\.py([[:space:]]|$)'
+
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'robot_navigation/install/qbot_platform/lib/qbot_platform/adaptive_goal_tolerance\.py([[:space:]]|$)'
+
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'robot_navigation/install/qbot_platform/lib/qbot_platform/qbot_platform_driver_interface([[:space:]]|$)'
+
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'robot_navigation/install/qbot_platform/lib/qbot_platform/go_to_label\.py([[:space:]]|$)'
+
+
+    # --------------------------------------------------------
+    # Browser backend
+    # --------------------------------------------------------
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'robot_navigation/tools/map_label_gui\.py([[:space:]]|$)'
+
+
+    # --------------------------------------------------------
+    # Mapping/navigation launcher processes
+    # --------------------------------------------------------
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'run_qbot_navigation\.sh'
+
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'run_qbot_mapping\.sh'
+
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'qbot_platform_manual_map_launch'
+
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'qbot_platform_map_nav_bringup_launch'
+
+
+    # --------------------------------------------------------
+    # Navigation stack
+    # --------------------------------------------------------
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'planner_server'
+
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'controller_server'
+
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'bt_navigator'
+
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'behavior_server'
+
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'waypoint_follower'
+
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'velocity_smoother'
+
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'map_server'
+
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'lifecycle_manager'
+
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'recoveries_server'
+
+
+    # --------------------------------------------------------
+    # Localization / mapping
+    # --------------------------------------------------------
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        '(^|[[:space:]/])amcl([[:space:]]|$)'
+
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'cartographer'
+
+}
+
+
+# ============================================================
+# EVIDENCE LOGGER CLEANUP
+# ============================================================
+
+signal_evidence_processes() {
+
+    local signal_name="$1"
+
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'src/storage/odom_logger\.py'
+
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'src/storage/amcl_pose_logger\.py'
+
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'src/storage/cmd_vel_logger\.py'
+
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'src/storage/lidar_logger\.py'
+
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'src/storage/task_event_logger\.py'
+
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'ros2 bag record'
+
+}
+
+
+# ============================================================
+# FULL STALE CLEANUP
+#
+# Run BEFORE baseline snapshot.
+#
+# Otherwise leftovers from the last experiment could become
+# protected baseline processes.
+# ============================================================
+
+cleanup_stale_experiment() {
+
+    echo
+    echo "============================================================"
+    echo "CHECKING FOR STALE EXPERIMENT PROCESSES"
+    echo "============================================================"
+    echo
+
+
+    # --------------------------------------------------------
+    # Browser port
+    # --------------------------------------------------------
+
+    if fuser 8765/tcp \
+        >/dev/null 2>&1
+    then
+
+        echo "Stopping stale browser server on port 8765..."
+
+
+        fuser -k 8765/tcp \
+            >/dev/null 2>&1 || true
+
+    fi
+
+
+    # --------------------------------------------------------
+    # Graceful stop
+    # --------------------------------------------------------
+
+    echo "Stopping stale loggers / rosbag..."
+
+    signal_evidence_processes INT
+
+
+    echo "Stopping stale robot runtime nodes..."
+
+    signal_project_runtime_nodes INT
+
+
+    sleep 2
+
+
+    # --------------------------------------------------------
+    # TERM survivors
+    # --------------------------------------------------------
+
+    signal_evidence_processes TERM
+
+    signal_project_runtime_nodes TERM
+
+
+    sleep 2
+
+
+    # --------------------------------------------------------
+    # KILL final survivors
+    # --------------------------------------------------------
+
+    signal_evidence_processes KILL
+
+    signal_project_runtime_nodes KILL
+
+
+    sleep 1
+
+
+    # --------------------------------------------------------
+    # Browser fallback
+    # --------------------------------------------------------
+
+    if fuser 8765/tcp \
+        >/dev/null 2>&1
+    then
+
+        fuser -k 8765/tcp \
+            >/dev/null 2>&1 || true
+
+    fi
+
+
+    # --------------------------------------------------------
+    # Clear stale ROS CLI graph cache
+    #
+    # This does NOT stop ROS nodes.
+    # --------------------------------------------------------
+
+    ROS_DOMAIN_ID=57 \
+        ros2 daemon stop \
+        >/dev/null 2>&1 || true
+
+
+    sleep 1
+
+
+    ROS_DOMAIN_ID=57 \
+        ros2 daemon start \
+        >/dev/null 2>&1 || true
+
+
+    echo
+    echo "Stale experiment cleanup complete."
+
+}
+
+
+cleanup_stale_experiment
+
+
+# ============================================================
 # ROBOT PROCESS GROUP DETECTION
 #
-# Only valid positive PGIDs are returned.
-# PGID 0 is NEVER allowed.
+# Used as an additional cleanup mechanism for process groups
+# created AFTER this experiment begins.
 # ============================================================
 
 robot_process_pgids() {
@@ -72,6 +478,7 @@ robot_process_pgids() {
         /run_qbot_mapping\.sh/ ||
         /robot_navigation\/install\/qbot_platform/ ||
         /qbot_platform_manual_map_launch/ ||
+        /qbot_platform_map_nav_bringup_launch/ ||
         /qbot_platform.*launch/ ||
         /cartographer/ ||
         /nav2_/ ||
@@ -91,92 +498,15 @@ robot_process_pgids() {
         ' \
         | awk '$1 ~ /^[1-9][0-9]*$/' \
         | sort -nu
+
 }
 
 
 # ============================================================
-# SAFE STALE CLEANUP
+# BASELINE PROCESS GROUPS
 #
-# We only clean:
-#   - old browser server on port 8765
-#   - old evidence logger processes
-#   - old rosbag recorder
-#
-# We DO NOT kill arbitrary navigation process groups here.
-# ============================================================
-
-stop_stale_pid_matches() {
-
-    local pattern="$1"
-    local pids
-
-
-    pids="$(
-        pgrep -f "$pattern" \
-            2>/dev/null || true
-    )"
-
-
-    while read -r pid
-    do
-
-        if [ -z "$pid" ]; then
-            continue
-        fi
-
-
-        if [ "$pid" = "$$" ]; then
-            continue
-        fi
-
-
-        if [ "$pid" = "$PPID" ]; then
-            continue
-        fi
-
-
-        kill -INT "$pid" \
-            2>/dev/null || true
-
-
-    done <<< "$pids"
-}
-
-
-echo
-echo "Checking for stale processes from a previous experiment..."
-
-
-if fuser 8765/tcp \
-    >/dev/null 2>&1
-then
-
-    echo "Stopping stale map-label browser server..."
-
-    fuser -k 8765/tcp \
-        >/dev/null 2>&1 || true
-
-fi
-
-
-stop_stale_pid_matches \
-    'src/storage/(odom_logger|amcl_pose_logger|cmd_vel_logger|lidar_logger|task_event_logger)\.py'
-
-
-stop_stale_pid_matches \
-    'ros2 bag record'
-
-
-sleep 1
-
-
-echo "Stale logging/browser cleanup complete."
-
-
-# ============================================================
-# SNAPSHOT EXISTING ROBOT PROCESS GROUPS
-#
-# Anything already running now is protected.
+# Anything still running after stale cleanup is deliberately
+# protected by process-group cleanup.
 # ============================================================
 
 BASELINE_PGIDS="$(
@@ -364,6 +694,7 @@ conn.execute(
 
 
 conn.commit()
+
 conn.close()
 
 
@@ -425,7 +756,7 @@ pgid_is_baseline() {
 
 
 # ============================================================
-# SIGNAL ONLY ROBOT GROUPS CREATED DURING THIS RUN
+# SIGNAL ONLY NEW ROBOT PROCESS GROUPS
 # ============================================================
 
 signal_new_robot_groups() {
@@ -457,22 +788,15 @@ signal_new_robot_groups() {
         fi
 
 
-        # Only positive integer process-group IDs.
-        # Never PGID 0.
-
-        if ! [[ "$pgid" =~ ^[1-9][0-9]*$ ]]; then
+        if ! valid_positive_integer "$pgid"; then
             continue
         fi
 
-
-        # Never signal our launcher shell.
 
         if [ "$pgid" = "$our_pgid" ]; then
             continue
         fi
 
-
-        # Protect anything that existed before this run.
 
         if pgid_is_baseline "$pgid"; then
             continue
@@ -495,7 +819,27 @@ signal_new_robot_groups() {
 
 
 # ============================================================
-# CLEANUP
+# SHOW WHAT ROBOT PROCESSES REMAIN
+# ============================================================
+
+show_remaining_robot_processes() {
+
+    echo
+    echo "Robot-related processes remaining:"
+    echo
+
+
+    ps -eo pid,ppid,user,pgid,sid,args \
+        | grep -E \
+        'qbot_platform|run_qbot|cartographer|nav2|planner_server|controller_server|bt_navigator|behavior_server|map_server|amcl|lidar|wheel_odometry|scan_wedge_filter|adaptive_goal_tolerance|ros2 bag|odom_logger|task_event_logger' \
+        | grep -v grep \
+        || true
+
+}
+
+
+# ============================================================
+# CLEANUP CURRENT EXPERIMENT
 # ============================================================
 
 cleanup_processes() {
@@ -508,7 +852,7 @@ cleanup_processes() {
 
 
     # --------------------------------------------------------
-    # Evidence logger process group
+    # 1. Evidence logger launcher process group
     # --------------------------------------------------------
 
     if [ -n "${LOGGER_PID:-}" ]; then
@@ -523,7 +867,7 @@ cleanup_processes() {
         )"
 
 
-        if [[ "$logger_pgid" =~ ^[1-9][0-9]*$ ]]; then
+        if valid_positive_integer "$logger_pgid"; then
 
             echo \
                 "Stopping evidence logger group: $logger_pgid"
@@ -538,11 +882,8 @@ cleanup_processes() {
     fi
 
 
-    sleep 2
-
-
     # --------------------------------------------------------
-    # Browser GUI process group
+    # 2. Browser process group
     # --------------------------------------------------------
 
     if [ -n "${GUI_PID:-}" ]; then
@@ -557,7 +898,7 @@ cleanup_processes() {
         )"
 
 
-        if [[ "$gui_pgid" =~ ^[1-9][0-9]*$ ]]; then
+        if valid_positive_integer "$gui_pgid"; then
 
             echo \
                 "Stopping browser GUI group: $gui_pgid"
@@ -572,52 +913,69 @@ cleanup_processes() {
     fi
 
 
-    sleep 1
-
-
     # --------------------------------------------------------
-    # Detached mapping/navigation groups created after startup
+    # 3. Explicit detached process cleanup
+    #
+    # This is the layer that handles processes adopted by PID 1.
     # --------------------------------------------------------
 
     echo
-    echo "Stopping detached experiment ROS groups..."
+    echo "Stopping detached QBot/runtime processes..."
 
+
+    signal_evidence_processes INT
+
+    signal_project_runtime_nodes INT
+
+
+    # --------------------------------------------------------
+    # 4. Additional process-group cleanup
+    # --------------------------------------------------------
 
     signal_new_robot_groups INT
+
+
+    sleep 3
+
+
+    # --------------------------------------------------------
+    # 5. TERM survivors
+    # --------------------------------------------------------
+
+    echo
+    echo "Terminating surviving experiment processes..."
+
+
+    signal_evidence_processes TERM
+
+    signal_project_runtime_nodes TERM
+
+    signal_new_robot_groups TERM
 
 
     sleep 2
 
 
-    signal_new_robot_groups TERM
+    # --------------------------------------------------------
+    # 6. KILL final survivors
+    # --------------------------------------------------------
+
+    echo
+    echo "Force-stopping final survivors..."
+
+
+    signal_evidence_processes KILL
+
+    signal_project_runtime_nodes KILL
+
+    signal_new_robot_groups KILL
 
 
     sleep 1
 
 
-    signal_new_robot_groups KILL
-
-
     # --------------------------------------------------------
-    # Session-specific logging fallback
-    # --------------------------------------------------------
-
-    if [ -n "${SESSION_ID:-}" ]; then
-
-        pkill -INT -f \
-            "src/storage/.*${SESSION_ID}" \
-            2>/dev/null || true
-
-
-        pkill -INT -f \
-            "ros2 bag record.*${SESSION_ID}" \
-            2>/dev/null || true
-
-    fi
-
-
-    # --------------------------------------------------------
-    # Browser port
+    # 7. Browser port
     # --------------------------------------------------------
 
     if fuser 8765/tcp \
@@ -635,12 +993,37 @@ cleanup_processes() {
 
 
     # --------------------------------------------------------
-    # Refresh ROS graph
+    # 8. Refresh ROS discovery
+    #
+    # This does not kill ROS nodes.
+    # The actual nodes were stopped above.
     # --------------------------------------------------------
+
+    echo
+    echo "Refreshing ROS 2 daemon..."
+
 
     ROS_DOMAIN_ID=57 \
         ros2 daemon stop \
         >/dev/null 2>&1 || true
+
+
+    sleep 1
+
+
+    ROS_DOMAIN_ID=57 \
+        ros2 daemon start \
+        >/dev/null 2>&1 || true
+
+
+    sleep 1
+
+
+    # --------------------------------------------------------
+    # 9. Display survivors
+    # --------------------------------------------------------
+
+    show_remaining_robot_processes
 
 
     echo
@@ -684,6 +1067,7 @@ db_path = (
 
 
 if not db_path.exists():
+
     raise SystemExit
 
 
@@ -713,6 +1097,7 @@ conn.execute(
 
 
 conn.commit()
+
 conn.close()
 
 
@@ -743,7 +1128,13 @@ handle_interrupt() {
 
         EXPERIMENT_FINISHED=1
 
+        SESSION_ACTIVE=0
+
     fi
+
+
+    echo
+    echo "Experiment stopped."
 
 
     exit 130
@@ -762,13 +1153,20 @@ final_exit_cleanup() {
 
     if [ "$EXPERIMENT_FINISHED" -eq 0 ]; then
 
+        echo
+        echo "Final launcher cleanup..."
+
+
         cleanup_processes
+
 
         close_session \
             2>/dev/null || true
 
 
         EXPERIMENT_FINISHED=1
+
+        SESSION_ACTIVE=0
 
     fi
 
@@ -872,6 +1270,8 @@ then
 
     EXPERIMENT_FINISHED=1
 
+    SESSION_ACTIVE=0
+
     exit 1
 
 fi
@@ -964,8 +1364,10 @@ show_live_status() {
 
 
     python - <<'PY'
+import json
 import os
 import sqlite3
+import urllib.request
 
 from pathlib import Path
 
@@ -1014,8 +1416,62 @@ print(
 )
 
 
+try:
+
+    with urllib.request.urlopen(
+        "http://localhost:8765/api/navigation/status",
+        timeout=2,
+    ) as response:
+
+        runtime = json.loads(
+            response.read().decode(
+                "utf-8"
+            )
+        )
+
+
+    print()
+    print("Navigation runtime:")
+
+    print(
+        "  state:",
+        runtime.get("state"),
+    )
+
+    print(
+        "  active map:",
+        runtime.get("active_map"),
+    )
+
+    print(
+        "  ready:",
+        runtime.get("ready"),
+    )
+
+    print(
+        "  localization state:",
+        runtime.get(
+            "localization_state"
+        ),
+    )
+
+    print(
+        "  localized:",
+        runtime.get("localized"),
+    )
+
+except Exception as exc:
+
+    print()
+    print(
+        "Navigation runtime unavailable:",
+        exc,
+    )
+
+
 if row:
 
+    print()
     print(
         "Latest task event:",
         {
@@ -1038,6 +1494,7 @@ if row:
 
 else:
 
+    print()
     print(
         "No task events recorded yet."
     )
@@ -1079,7 +1536,13 @@ PY
 
 
 # ============================================================
-# DETECT MAP FROM TASK EVENTS
+# DETECT MAP
+#
+# First preference:
+#   current browser/navigation runtime
+#
+# Second preference:
+#   task-event history
 # ============================================================
 
 detect_session_map() {
@@ -1092,6 +1555,7 @@ python - <<'PY'
 import json
 import os
 import sqlite3
+import urllib.request
 
 from pathlib import Path
 
@@ -1103,6 +1567,50 @@ session_id = os.environ[
     "QBOT_EXPERIMENT_SESSION_ID"
 ]
 
+
+# ------------------------------------------------------------
+# Preferred: live browser/navigation runtime
+# ------------------------------------------------------------
+
+try:
+
+    with urllib.request.urlopen(
+        "http://localhost:8765/api/navigation/status",
+        timeout=2,
+    ) as response:
+
+        payload = json.loads(
+            response.read().decode(
+                "utf-8"
+            )
+        )
+
+
+    active_map = payload.get(
+        "active_map"
+    )
+
+
+    if active_map:
+
+        print(
+            str(active_map).strip()
+        )
+
+        raise SystemExit
+
+except SystemExit:
+
+    raise
+
+except Exception:
+
+    pass
+
+
+# ------------------------------------------------------------
+# Fallback: SQLite task events
+# ------------------------------------------------------------
 
 db = (
     repo
@@ -1171,7 +1679,22 @@ PY
 )"
 
 
+    # Normalize:
+    #
+    # map1234.pgm -> map1234
+
     if [ -n "$MAP_NAME" ]; then
+
+        MAP_NAME="$(
+            basename "$MAP_NAME"
+        )"
+
+        MAP_NAME="${MAP_NAME%.pgm}"
+
+        MAP_NAME="${MAP_NAME%.yaml}"
+
+        MAP_NAME="${MAP_NAME%_labels.json}"
+
 
         echo
         echo "Detected map:"
@@ -1228,6 +1751,7 @@ conn.execute(
 
 
 conn.commit()
+
 conn.close()
 PY
 
@@ -1298,8 +1822,8 @@ finalize_memories() {
 
     else
 
-        echo \
-            "Skipping map memory because map is unknown."
+        echo
+        echo "Skipping map memory because map is unknown."
 
     fi
 
@@ -1396,6 +1920,11 @@ end_live_session() {
     echo "============================================================"
 
 
+    # Detect map BEFORE killing browser runtime.
+
+    detect_session_map
+
+
     cleanup_processes
 
 
@@ -1418,7 +1947,10 @@ end_live_session() {
     echo "ROBOT SESSION ENDED"
     echo "============================================================"
     echo
-    echo "Logging and browser processes are stopped."
+    echo "Logging and experiment robot processes are stopped."
+    echo
+    echo "The persistent physical QBot driver was left running."
+    echo
     echo "Q&A remains available."
     echo
 
