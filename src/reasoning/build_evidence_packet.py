@@ -8,9 +8,15 @@ import statistics
 from pathlib import Path
 import urllib.error
 import urllib.request
-from live_ros_status import (
-    collect_ros_runtime,
-)
+try:
+    from .live_ros_status import (
+        collect_ros_runtime,
+    )
+
+except ImportError:
+    from live_ros_status import (
+        collect_ros_runtime,
+    )
 
 REPO_DIR = Path(__file__).resolve().parents[2]
 RUNTIME_DIR = REPO_DIR / "runtime_logs"

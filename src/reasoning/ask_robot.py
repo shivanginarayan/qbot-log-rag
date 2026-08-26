@@ -10,14 +10,25 @@ from pathlib import Path
 
 import requests
 
-from build_evidence_packet import (
-    build_packet,
-    build_live_packet,
-)
+try:
+    from .build_evidence_packet import (
+        build_packet,
+        build_live_packet,
+    )
 
-from generic_event_query import (
-    plan_and_query_events,
-)
+    from .generic_event_query import (
+        plan_and_query_events,
+    )
+
+except ImportError:
+    from build_evidence_packet import (
+        build_packet,
+        build_live_packet,
+    )
+
+    from generic_event_query import (
+        plan_and_query_events,
+    )
 
 
 MODEL_EMBED = "bge-m3"
@@ -62,6 +73,199 @@ MAPS_DIR = (
     / "robot_navigation"
     / "maps"
 )
+
+def normalize_map_name(
+    map_name,
+):
+    """
+    Convert map filenames such as:
+
+        map1234.pgm
+        map1234.yaml
+        map1234_labels.json
+
+    into the canonical map name:
+
+        map1234
+    """
+
+    if not map_name:
+        return None
+
+    name = Path(
+        str(map_name)
+    ).name
+
+    if name.endswith(
+        "_labels.json"
+    ):
+
+        name = name[
+            :-len("_labels.json")
+        ]
+
+    else:
+
+        name = Path(
+            name
+        ).stem
+
+    return name
+
+
+def load_current_map_metadata(
+    map_name,
+):
+    """
+    Read factual metadata for a known map.
+
+    This is NOT question routing and does not generate
+    an answer. It simply exposes map/label data to the
+    generic reasoning system.
+    """
+
+    normalized = (
+        normalize_map_name(
+            map_name
+        )
+    )
+
+    if not normalized:
+        return None
+
+    pgm_path = (
+        MAPS_DIR
+        / f"{normalized}.pgm"
+    )
+
+    yaml_path = (
+        MAPS_DIR
+        / f"{normalized}.yaml"
+    )
+
+    labels_path = (
+        MAPS_DIR
+        / f"{normalized}_labels.json"
+    )
+
+    result = {
+        "map":
+            normalized,
+
+        "runtime_map_name":
+            str(map_name),
+
+        "pgm_file":
+            str(pgm_path),
+
+        "pgm_exists":
+            pgm_path.exists(),
+
+        "yaml_file":
+            str(yaml_path),
+
+        "yaml_exists":
+            yaml_path.exists(),
+
+        "labels_file":
+            str(labels_path),
+
+        "labels_file_exists":
+            labels_path.exists(),
+
+        "label_count":
+            0,
+
+        "labels":
+            [],
+    }
+
+    if not labels_path.exists():
+        return result
+
+    try:
+
+        data = json.loads(
+            labels_path.read_text(
+                encoding="utf-8"
+            )
+        )
+
+    except Exception as exc:
+
+        result[
+            "read_error"
+        ] = str(exc)
+
+        return result
+
+    labels = data.get(
+        "labels",
+        [],
+    )
+
+    if not isinstance(
+        labels,
+        list,
+    ):
+        labels = []
+
+    cleaned = []
+
+    for label in labels:
+
+        if not isinstance(
+            label,
+            dict,
+        ):
+            continue
+
+        cleaned.append(
+            {
+                "id":
+                    label.get(
+                        "id"
+                    ),
+
+                "name":
+                    label.get(
+                        "name"
+                    ),
+
+                "kind":
+                    label.get(
+                        "kind"
+                    ),
+
+                "detail":
+                    label.get(
+                        "detail"
+                    ),
+
+                "world":
+                    label.get(
+                        "world"
+                    ),
+
+                "yaw":
+                    label.get(
+                        "yaw"
+                    ),
+            }
+        )
+
+    result[
+        "labels"
+    ] = cleaned
+
+    result[
+        "label_count"
+    ] = len(
+        cleaned
+    )
+
+    return result
+
 # ============================================================
 # TASK INTENT MEMORY
 # ============================================================
@@ -819,100 +1023,6 @@ def intent_occurrence_packet(
     return packet
 
 
-    # ========================================================
-    # CURRENT MAP / SAVED MAP METADATA
-    # ========================================================
-
-    current_map_metadata = None
-    saved_maps_metadata = None
-    structured_event_query = None
-
-
-    # --------------------------------------------------------
-    # Current map comes from the live runtime packet
-    # when available.
-    # --------------------------------------------------------
-
-    if live_packet is not None:
-
-        live_info = (
-            live_packet.get(
-                "live_session"
-            )
-            or {}
-        )
-
-        current_map_name = (
-            live_info.get(
-                "map"
-            )
-        )
-
-        if current_map_name:
-
-            current_map_metadata = (
-                load_current_map_metadata(
-                    current_map_name
-                )
-            )
-
-
-    # --------------------------------------------------------
-    # Saved-map inventory is independent of the live session.
-    # It reads the actual maps directory.
-    # --------------------------------------------------------
-
-    if asks_about_saved_maps(
-        question
-    ):
-
-        saved_maps_metadata = (
-            load_saved_maps_metadata()
-        )
-
-
-    # ========================================================
-    # GENERIC STRUCTURED EVENT QUERY
-    #
-    # This is intentionally NOT inside the live_packet block.
-    #
-    # It can search recorded task events across all sessions
-    # even if there is no active robot session.
-    # ========================================================
-
-    try:
-
-        structured_event_query = (
-            plan_and_query_events(
-                question,
-                current_session_id=(
-                    args.session_id
-                ),
-                current_map=(
-                    current_map_name
-                ),
-            )
-        )
-
-    except Exception as exc:
-
-        print(
-            "WARNING: Structured event query "
-            "could not be completed:"
-        )
-
-        print(
-            f"  {exc}"
-        )
-
-        structured_event_query = {
-            "used":
-                False,
-
-            "error":
-                str(exc),
-        }
-
 def asks_about_current_map(
     question,
 ):
@@ -1485,6 +1595,15 @@ GROUNDING RULES:
     not root cause. STARTED followed by FINISHED failed does
     not by itself explain why the task failed.
 
+58. referenced_maps_metadata contains factual metadata
+    for saved maps explicitly named in the user's question.
+
+    When it provides label_count or labels for a named map,
+    use those values directly.
+
+    Do not substitute current-map information or historical
+    behavior memory for explicitly named map metadata.
+
 Answer the user's question directly.
 """.strip()
 
@@ -1550,6 +1669,374 @@ def call_nemotron(
         "content"
     ]
 
+def load_saved_maps_metadata_old():
+    """
+    Inspect the robot_navigation/maps directory
+    and return the saved map inventory.
+
+    This is a factual data-source helper.
+    """
+
+    result = {
+        "maps_directory":
+            str(MAPS_DIR),
+
+        "directory_exists":
+            MAPS_DIR.exists(),
+
+        "map_count":
+            0,
+
+        "maps":
+            [],
+    }
+
+    if not MAPS_DIR.exists():
+        return result
+
+    discovered = {}
+
+    for path in MAPS_DIR.iterdir():
+
+        if not path.is_file():
+            continue
+
+        if path.name.endswith(
+            ".labels.yaml"
+        ):
+            continue
+
+        suffix = path.suffix.casefold()
+
+        if suffix not in {
+            ".pgm",
+            ".yaml",
+        }:
+            continue
+
+        map_name = path.stem
+
+        if not map_name:
+            continue
+
+        if map_name not in discovered:
+
+            discovered[
+                map_name
+            ] = {
+                "name":
+                    map_name,
+
+                "pgm":
+                    None,
+
+                "yaml":
+                    None,
+
+                "labels":
+                    None,
+            }
+
+        if suffix == ".pgm":
+
+            discovered[
+                map_name
+            ][
+                "pgm"
+            ] = str(path)
+
+        elif suffix == ".yaml":
+
+            discovered[
+                map_name
+            ][
+                "yaml"
+            ] = str(path)
+
+    for map_name, item in discovered.items():
+
+        labels_path = (
+            MAPS_DIR
+            / f"{map_name}_labels.json"
+        )
+
+        if labels_path.exists():
+
+            item[
+                "labels"
+            ] = str(
+                labels_path
+            )
+
+    maps = sorted(
+        discovered.values(),
+        key=lambda item:
+            item[
+                "name"
+            ].casefold(),
+    )
+
+    result[
+        "maps"
+    ] = maps
+
+    result[
+        "map_count"
+    ] = len(
+        maps
+    )
+
+    return result
+
+def load_saved_maps_metadata():
+    """
+    Inspect the robot_navigation/maps directory
+    and return the saved map inventory, including
+    label metadata for each map.
+    """
+
+    result = {
+        "maps_directory":
+            str(MAPS_DIR),
+
+        "directory_exists":
+            MAPS_DIR.exists(),
+
+        "map_count":
+            0,
+
+        "total_label_count":
+            0,
+
+        "maps":
+            [],
+    }
+
+    if not MAPS_DIR.exists():
+        return result
+
+    discovered = {}
+
+    for path in MAPS_DIR.iterdir():
+
+        if not path.is_file():
+            continue
+
+        if path.name.endswith(
+            ".labels.yaml"
+        ):
+            continue
+
+        suffix = path.suffix.casefold()
+
+        if suffix not in {
+            ".pgm",
+            ".yaml",
+        }:
+            continue
+
+        map_name = path.stem
+
+        if not map_name:
+            continue
+
+        if map_name not in discovered:
+
+            discovered[
+                map_name
+            ] = {
+                "name":
+                    map_name,
+
+                "pgm":
+                    None,
+
+                "yaml":
+                    None,
+
+                "labels_file":
+                    None,
+
+                "label_count":
+                    0,
+
+                "labels":
+                    [],
+            }
+
+        if suffix == ".pgm":
+
+            discovered[
+                map_name
+            ][
+                "pgm"
+            ] = str(path)
+
+        elif suffix == ".yaml":
+
+            discovered[
+                map_name
+            ][
+                "yaml"
+            ] = str(path)
+
+    total_label_count = 0
+
+    for map_name, item in discovered.items():
+
+        labels_path = (
+            MAPS_DIR
+            / f"{map_name}_labels.json"
+        )
+
+        if not labels_path.exists():
+            continue
+
+        item[
+            "labels_file"
+        ] = str(
+            labels_path
+        )
+
+        try:
+
+            data = json.loads(
+                labels_path.read_text(
+                    encoding="utf-8"
+                )
+            )
+
+        except Exception as exc:
+
+            item[
+                "labels_read_error"
+            ] = str(exc)
+
+            continue
+
+        labels = data.get(
+            "labels",
+            [],
+        )
+
+        if not isinstance(
+            labels,
+            list,
+        ):
+
+            labels = []
+
+        cleaned = []
+
+        for label in labels:
+
+            if not isinstance(
+                label,
+                dict,
+            ):
+                continue
+
+            cleaned.append(
+                {
+                    "id":
+                        label.get(
+                            "id"
+                        ),
+
+                    "name":
+                        label.get(
+                            "name"
+                        ),
+
+                    "kind":
+                        label.get(
+                            "kind"
+                        ),
+                }
+            )
+
+        item[
+            "labels"
+        ] = cleaned
+
+        item[
+            "label_count"
+        ] = len(
+            cleaned
+        )
+
+        total_label_count += len(
+            cleaned
+        )
+
+    maps = sorted(
+        discovered.values(),
+        key=lambda item:
+            item[
+                "name"
+            ].casefold(),
+    )
+
+    result[
+        "maps"
+    ] = maps
+
+    result[
+        "map_count"
+    ] = len(
+        maps
+    )
+
+    result[
+        "total_label_count"
+    ] = total_label_count
+
+    return result
+
+def load_referenced_maps_metadata(
+    question,
+):
+    """
+    Load metadata for saved maps explicitly named
+    in the user's question.
+    """
+
+    inventory = (
+        load_saved_maps_metadata()
+    )
+
+    q = question.casefold()
+
+    results = []
+
+    for item in inventory.get(
+        "maps",
+        [],
+    ):
+
+        map_name = item.get(
+            "name"
+        )
+
+        if not map_name:
+            continue
+
+        if map_name.casefold() not in q:
+            continue
+
+        metadata = (
+            load_current_map_metadata(
+                map_name
+            )
+        )
+
+        if metadata is not None:
+
+            results.append(
+                metadata
+            )
+
+    return results
 
 # ============================================================
 # MAIN
@@ -1633,11 +2120,13 @@ def main():
 
 
     # ========================================================
-    # CURRENT MAP METADATA
+    # CURRENT MAP / SAVED MAP METADATA
     # ========================================================
 
     current_map_metadata = None
     saved_maps_metadata = None
+    referenced_maps_metadata = []
+    structured_event_query = None
 
     if live_packet is not None:
 
@@ -1662,56 +2151,66 @@ def main():
                 )
             )
 
-        # ========================================================
-        # GENERIC STRUCTURED EVENT QUERY
-        #
-        # Nemotron interprets the natural-language question.
-        # Python performs the exact query/count over every
-        # recorded task_events table.
-        # ========================================================
 
-        structured_event_query = None
+    # --------------------------------------------------------
+    # Saved-map inventory is independent of the live session.
+    # --------------------------------------------------------
 
-        try:
+    if asks_about_saved_maps(
+        question
+    ):
 
-            structured_event_query = (
-                plan_and_query_events(
-                    question,
-                    current_session_id=(
-                        args.session_id
-                    ),
-                    current_map=(
-                        current_map_name
-                    ),
-                )
-            )
+        saved_maps_metadata = (
+            load_saved_maps_metadata()
+        )
 
-        except Exception as exc:
-
-            print(
-                "WARNING: Structured event query "
-                "could not be completed:"
-            )
-
-            print(
-                f"  {exc}"
-            )
-
-            structured_event_query = {
-                "used":
-                    False,
-
-                "error":
-                    str(exc),
-            }
-
-            if asks_about_saved_maps(
+        referenced_maps_metadata = (
+            load_referenced_maps_metadata(
                 question
-            ):
+            )
+        )
 
-                saved_maps_metadata = (
-                    load_saved_maps_metadata()
-                )
+
+    # ========================================================
+    # GENERIC STRUCTURED EVENT QUERY
+    #
+    # This must not depend on a live packet. It can query
+    # recorded task_events across sessions before, during,
+    # or after a live robot session.
+    # ========================================================
+
+    try:
+
+        structured_event_query = (
+            plan_and_query_events(
+                question,
+                current_session_id=(
+                    args.session_id
+                ),
+                current_map=(
+                    current_map_name
+                ),
+            )
+        )
+
+    except Exception as exc:
+
+        print(
+            "WARNING: Structured event query "
+            "could not be completed:"
+        )
+
+        print(
+            f"  {exc}"
+        )
+
+        structured_event_query = {
+            "used":
+                False,
+
+            "error":
+                str(exc),
+        }
 
 
     # ========================================================
@@ -1852,6 +2351,18 @@ def main():
 
                 "source_type":
                     "all_session_task_events",
+            }
+        )
+
+    if referenced_maps_metadata:
+
+        packets.append(
+            {
+                "referenced_maps_metadata":
+                    referenced_maps_metadata,
+
+                "source_type":
+                    "named_map_files",
             }
         )
 
@@ -2155,6 +2666,42 @@ def main():
                             )
                         ],
                 },
+            )
+
+        elif "referenced_maps_metadata" in packet:
+
+            metadata_list = packet[
+                "referenced_maps_metadata"
+            ]
+
+            print(
+                "- REFERENCED MAPS",
+                [
+                    {
+                        "map":
+                            item.get(
+                                "map"
+                            ),
+
+                        "label_count":
+                            item.get(
+                                "label_count"
+                            ),
+
+                        "labels":
+                            [
+                                label.get(
+                                    "name"
+                                )
+                                for label
+                                in item.get(
+                                    "labels",
+                                    []
+                                )
+                            ],
+                    }
+                    for item in metadata_list
+                ],
             )
 
         elif "live_session" in packet:

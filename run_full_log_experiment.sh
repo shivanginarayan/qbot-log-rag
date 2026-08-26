@@ -60,7 +60,24 @@ cd "$REPO_DIR" || exit 1
 
 # ============================================================
 # PYTHON ENVIRONMENT
+#
+# The venv is for THIS launcher only: the session heredocs,
+# ask_robot.py, the index builders, and the embedding builders.
+#
+# It must NOT reach the ROS stack. Every qbot_platform Python
+# node is installed with a "#!/usr/bin/env python3" shebang, so
+# an active venv on PATH silently changes which interpreter
+# cmd_vel_arbiter.py, manual_assistance.py, go_to_label.py and
+# the rest are started with. Running ./run_qbot_map_labeler.sh
+# by hand uses the system python3, and the ROS stack must start
+# identically either way.
+#
+# Remember the pre-venv PATH so the map labeler can be launched
+# with it below.
 # ============================================================
+
+ROS_STACK_PATH="$PATH"
+
 
 if [ -f ".venv/bin/activate" ]; then
     source .venv/bin/activate
@@ -71,11 +88,32 @@ fi
 # ROS
 # ============================================================
 
+QBOT_INHERITED_DOMAIN="${ROS_DOMAIN_ID:-}"
+
 export ROS_DOMAIN_ID=57
 
 
 echo
 echo "Using ROS_DOMAIN_ID=$ROS_DOMAIN_ID"
+
+
+# A bare terminal gives run_qbot_map_labeler.sh 63, while this
+# experiment always uses 57. Both stacks work, but they are
+# different ROS graphs, so say so before the two runs get
+# compared against each other.
+
+if [ -n "$QBOT_INHERITED_DOMAIN" ] \
+    && [ "$QBOT_INHERITED_DOMAIN" != "57" ]
+then
+
+    echo
+    echo "NOTE: this shell had ROS_DOMAIN_ID=$QBOT_INHERITED_DOMAIN;"
+    echo "      the experiment forces 57."
+    echo
+    echo "      To compare against a standalone run, use:"
+    echo "        ROS_DOMAIN_ID=57 ./run_qbot_map_labeler.sh"
+
+fi
 
 
 # ============================================================
@@ -209,6 +247,30 @@ signal_project_runtime_nodes() {
         'robot_navigation/install/qbot_platform/lib/qbot_platform/go_to_label\.py([[:space:]]|$)'
 
 
+    signal_user_processes_matching \
+        "$signal_name" \
+        'robot_navigation/install/qbot_platform/lib/qbot_platform/cmd_vel_arbiter\.py([[:space:]]|$)'
+
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'robot_navigation/install/qbot_platform/lib/qbot_platform/manual_assistance\.py([[:space:]]|$)'
+
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'robot_navigation/install/qbot_platform/lib/qbot_platform/breadcrumb_return\.py([[:space:]]|$)'
+
+
+    # The gamepad node. game_controller_open() is exclusive, so a
+    # survivor here keeps the next navigation_joystick/joystickCommands
+    # from ever opening the controller.
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'robot_navigation/install/qbot_platform/lib/qbot_platform/command([[:space:]]|$)'
+
+
     # --------------------------------------------------------
     # Browser backend
     # --------------------------------------------------------
@@ -274,6 +336,11 @@ signal_project_runtime_nodes() {
     signal_user_processes_matching \
         "$signal_name" \
         'velocity_smoother'
+
+
+    signal_user_processes_matching \
+        "$signal_name" \
+        'smoother_server'
 
 
     signal_user_processes_matching \
@@ -954,7 +1021,7 @@ show_remaining_robot_processes() {
 
     ps -eo pid,ppid,user,pgid,sid,args \
         | grep -E \
-        'qbot_platform|run_qbot|cartographer|nav2|planner_server|controller_server|bt_navigator|behavior_server|map_server|amcl|lidar|wheel_odometry|scan_wedge_filter|adaptive_goal_tolerance|ros2 bag|odom_logger|task_event_logger' \
+        'qbot_platform|run_qbot|cartographer|nav2|planner_server|controller_server|bt_navigator|behavior_server|smoother_server|map_server|amcl|lidar|wheel_odometry|scan_wedge_filter|adaptive_goal_tolerance|cmd_vel_arbiter|manual_assistance|breadcrumb_return|ros2 bag|odom_logger|task_event_logger' \
         | grep -v grep \
         || true
 
@@ -1309,7 +1376,19 @@ echo
 echo "Starting browser map labeler..."
 
 
-setsid \
+# The labeler and everything it launches - run_qbot_navigation.sh,
+# run_qbot_mapping.sh, ros2 launch, and every qbot_platform node -
+# inherit this environment verbatim. Drop the venv from it so those
+# nodes start on the same interpreter they get when this script is
+# run by hand.
+#
+# env execs setsid in the same PID, so $! stays the labeler's PID.
+
+env \
+    -u VIRTUAL_ENV \
+    -u PYTHONHOME \
+    PATH="$ROS_STACK_PATH" \
+    setsid \
     ./run_qbot_map_labeler.sh \
     >"$GUI_LOG" 2>&1 &
 

@@ -708,9 +708,15 @@ def find_lifecycle_for_event(
 def main():
     import argparse
 
-    from generic_event_query import (
-        load_all_events,
-    )
+    try:
+        from .generic_event_query import (
+            load_all_events,
+        )
+
+    except ImportError:
+        from generic_event_query import (
+            load_all_events,
+        )
 
     parser = argparse.ArgumentParser()
 

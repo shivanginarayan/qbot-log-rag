@@ -6,10 +6,17 @@ import sqlite3
 from pathlib import Path
 
 import requests
-from task_timeline import (
-    build_task_lifecycles,
-    compact_lifecycle,
-)
+try:
+    from .task_timeline import (
+        build_task_lifecycles,
+        compact_lifecycle,
+    )
+
+except ImportError:
+    from task_timeline import (
+        build_task_lifecycles,
+        compact_lifecycle,
+    )
 
 REPO_DIR = Path(__file__).resolve().parents[2]
 
