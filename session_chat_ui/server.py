@@ -31,6 +31,10 @@ REPO_DIR = UI_DIR.parent
 STATIC_DIR = UI_DIR / "static"
 RUNTIME_DIR = REPO_DIR / "runtime_logs"
 ASK_ROBOT_SCRIPT = REPO_DIR / "src" / "reasoning" / "ask_robot.py"
+RAG_COMPAT_SCRIPT = UI_DIR / "rag_compat.py"
+MAPS_DIR = REPO_DIR / "robot_navigation" / "maps"
+NAVIGATION_STATUS_URL = "http://127.0.0.1:8765/api/navigation/status"
+MAPPING_STATUS_URL = "http://127.0.0.1:8765/api/mapping/status"
 
 NVIDIA_MODEL = "nvidia/nemotron-3-super-120b-a12b"
 ANSWER_MARKER = "ANSWER\n" + ("=" * 70) + "\n"
@@ -105,6 +109,26 @@ class SessionLocator:
                 LIMIT 1
                 """
             ).fetchone()
+
+            event_map_name = ""
+            if row is not None and not (row["map_name"] or "").strip():
+                try:
+                    event_row = connection.execute(
+                        """
+                        SELECT map_name
+                        FROM task_events
+                        WHERE session_id = ?
+                          AND map_name IS NOT NULL
+                          AND TRIM(map_name) != ''
+                        ORDER BY event_time_ns DESC
+                        LIMIT 1
+                        """,
+                        (str(row["session_id"]),),
+                    ).fetchone()
+                    if event_row is not None:
+                        event_map_name = str(event_row["map_name"] or "")
+                except sqlite3.Error:
+                    pass
         except (OSError, sqlite3.Error):
             return None
         finally:
@@ -118,7 +142,7 @@ class SessionLocator:
             "session_id": str(row["session_id"]),
             "status": str(row["status"] or "unknown"),
             "started_at_ns": int(row["started_at_ns"] or 0),
-            "map_name": row["map_name"] or "",
+            "map_name": row["map_name"] or event_map_name,
             "database": database,
         }
 
@@ -198,6 +222,23 @@ class ChatStore:
     INDEX = """
         CREATE INDEX IF NOT EXISTS idx_ui_chat_session_time
         ON ui_chat_interactions(session_id, asked_at_ns)
+    """
+
+    USER_MAP_SCHEMA = """
+        CREATE TABLE IF NOT EXISTS ui_user_maps (
+            session_id TEXT NOT NULL,
+            map_name TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            claimed_at_ns INTEGER NOT NULL,
+            claimed_at_iso TEXT NOT NULL,
+            PRIMARY KEY (session_id, map_name),
+            FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+        )
+    """
+
+    USER_MAP_INDEX = """
+        CREATE INDEX IF NOT EXISTS idx_ui_user_maps_user_time
+        ON ui_user_maps(user_id, claimed_at_ns)
     """
 
     def __init__(self, attempts=5):
@@ -382,6 +423,120 @@ class ChatStore:
         interactions.reverse()
         return interactions
 
+    def claim_map(self, session, user_id, map_name):
+        """Assign a newly detected map once; never transfer its ownership."""
+
+        claimed_at_ns, claimed_at_iso = utc_now()
+        inserted = [False]
+
+        def operation(connection):
+            connection.execute(self.USER_MAP_SCHEMA)
+            connection.execute(self.USER_MAP_INDEX)
+            cursor = connection.execute(
+                """
+                INSERT OR IGNORE INTO ui_user_maps (
+                    session_id,
+                    map_name,
+                    user_id,
+                    claimed_at_ns,
+                    claimed_at_iso
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    session["session_id"],
+                    map_name,
+                    user_id,
+                    claimed_at_ns,
+                    claimed_at_iso,
+                ),
+            )
+            inserted[0] = cursor.rowcount == 1
+
+        self._write(session["database"], operation)
+        return inserted[0]
+
+    @staticmethod
+    def user_maps(sessions, user_id):
+        """Return maps owned by one user across readable experiment databases."""
+
+        maps = []
+        for session in sessions:
+            connection = None
+            try:
+                database_uri = "file:{}?mode=ro".format(session["database"])
+                connection = sqlite3.connect(database_uri, timeout=2, uri=True)
+                rows = connection.execute(
+                    """
+                    SELECT session_id, map_name, claimed_at_ns, claimed_at_iso
+                    FROM ui_user_maps
+                    WHERE user_id = ?
+                    ORDER BY claimed_at_ns DESC
+                    """,
+                    (user_id,),
+                ).fetchall()
+            except (OSError, sqlite3.Error):
+                continue
+            finally:
+                if connection is not None:
+                    connection.close()
+
+            for row in rows:
+                maps.append(
+                    {
+                        "session_id": str(row[0]),
+                        "map_name": str(row[1]),
+                        "claimed_at_ns": int(row[2] or 0),
+                        "claimed_at_iso": str(row[3] or ""),
+                    }
+                )
+
+        maps.sort(key=lambda item: item["claimed_at_ns"], reverse=True)
+        return maps
+
+    @staticmethod
+    def map_owner(sessions, map_name):
+        earliest_owner = None
+        earliest_time = None
+
+        for session in sessions:
+            connection = None
+            try:
+                database_uri = "file:{}?mode=ro".format(session["database"])
+                connection = sqlite3.connect(database_uri, timeout=2, uri=True)
+                row = connection.execute(
+                    """
+                    SELECT user_id, claimed_at_ns
+                    FROM ui_user_maps
+                    WHERE map_name = ?
+                    ORDER BY claimed_at_ns ASC
+                    LIMIT 1
+                    """,
+                    (map_name,),
+                ).fetchone()
+            except (OSError, sqlite3.Error):
+                continue
+            finally:
+                if connection is not None:
+                    connection.close()
+
+            if row is not None:
+                claimed_at_ns = int(row[1] or 0)
+                if earliest_time is None or claimed_at_ns < earliest_time:
+                    earliest_owner = str(row[0])
+                    earliest_time = claimed_at_ns
+
+        return earliest_owner
+
+    @classmethod
+    def latest_map_for_user(cls, sessions, user_id, preferred_map=""):
+        maps = cls.user_maps(sessions, user_id)
+        if preferred_map and any(
+            item["map_name"] == preferred_map for item in maps
+        ):
+            return preferred_map
+        return maps[0]["map_name"] if maps else ""
+
 
 class RagRunner:
     """Invoke the team's unchanged session-aware RAG command."""
@@ -411,7 +566,10 @@ class RagRunner:
 
         command = [
             sys.executable,
+            str(RAG_COMPAT_SCRIPT),
+            "--core-script",
             str(self.script),
+            "--",
             "--session-id",
             session_id,
             "--audience",
@@ -486,6 +644,107 @@ class RagRunner:
         }
 
 
+class MapStatusLocator:
+    """Resolve the current/newest experiment map without changing team data."""
+
+    def __init__(
+        self,
+        maps_dir=MAPS_DIR,
+        navigation_status_url=NAVIGATION_STATUS_URL,
+        mapping_status_url=MAPPING_STATUS_URL,
+        request_timeout=0.75,
+    ):
+        self.maps_dir = Path(maps_dir)
+        self.navigation_status_url = navigation_status_url
+        self.mapping_status_url = mapping_status_url
+        self.request_timeout = request_timeout
+
+    @staticmethod
+    def _clean_name(value):
+        if not isinstance(value, str) or not value.strip():
+            return ""
+        return Path(value.strip()).stem
+
+    def _read_status(self, url):
+        try:
+            with urlopen(url, timeout=self.request_timeout) as response:
+                if not 200 <= response.status < 300:
+                    return {}
+                payload = json.loads(response.read().decode("utf-8"))
+                return payload if isinstance(payload, dict) else {}
+        except (OSError, URLError, ValueError, json.JSONDecodeError):
+            return {}
+
+    def _newest_session_map(self, session):
+        if not self.maps_dir.is_dir() or session is None:
+            return ""
+
+        started_at_ns = int(session.get("started_at_ns") or 0)
+        candidates = []
+        try:
+            for yaml_path in self.maps_dir.glob("*.yaml"):
+                pgm_path = yaml_path.with_suffix(".pgm")
+                if not pgm_path.is_file():
+                    continue
+                modified_ns = max(
+                    yaml_path.stat().st_mtime_ns,
+                    pgm_path.stat().st_mtime_ns,
+                )
+                if modified_ns >= started_at_ns:
+                    candidates.append((modified_ns, yaml_path.stem))
+        except OSError:
+            return ""
+
+        return max(candidates)[1] if candidates else ""
+
+    def _created_during_session(self, map_name, session):
+        if not map_name or session is None:
+            return False
+
+        started_at_ns = int(session.get("started_at_ns") or 0)
+        paths = [
+            self.maps_dir / (map_name + ".yaml"),
+            self.maps_dir / (map_name + ".pgm"),
+        ]
+        try:
+            modified_times = [
+                path.stat().st_mtime_ns for path in paths if path.is_file()
+            ]
+        except OSError:
+            return False
+        return bool(modified_times and max(modified_times) >= started_at_ns)
+
+    def locate_details(self, session):
+        """Return a map name and whether this session created that map."""
+
+        navigation = self._read_status(self.navigation_status_url)
+        active_map = self._clean_name(navigation.get("active_map"))
+        if active_map:
+            return {
+                "name": active_map,
+                "claimable": self._created_during_session(active_map, session),
+            }
+
+        mapping = self._read_status(self.mapping_status_url)
+        for key in ("reserved_map", "saved_map"):
+            mapping_name = self._clean_name(mapping.get(key))
+            if mapping_name:
+                return {"name": mapping_name, "claimable": True}
+
+        newest_map = self._newest_session_map(session)
+        if newest_map:
+            return {"name": newest_map, "claimable": True}
+
+        recorded_map = self._clean_name((session or {}).get("map_name"))
+        return {
+            "name": recorded_map,
+            "claimable": self._created_during_session(recorded_map, session),
+        }
+
+    def locate(self, session):
+        return self.locate_details(session)["name"]
+
+
 class ChatApplication:
     def __init__(
         self,
@@ -494,10 +753,12 @@ class ChatApplication:
         runner,
         max_parallel_requests=2,
         initial_api_key="",
+        map_locator=None,
     ):
         self.locator = locator
         self.store = store
         self.runner = runner
+        self.map_locator = map_locator or MapStatusLocator()
         self.request_slots = threading.BoundedSemaphore(max_parallel_requests)
         self._api_key_lock = threading.Lock()
         self._api_key = initial_api_key.strip()
@@ -526,12 +787,36 @@ class ChatApplication:
         except (OSError, URLError, ValueError):
             return False
 
-    def status(self):
+    def status(self, user_id=""):
         session = self.locator.locate()
         api_key_configured = self.has_api_key()
         embedding_ready = self.embedding_ready()
         rag_command_ready = ASK_ROBOT_SCRIPT.is_file()
         session_ready = session is not None
+        map_name = ""
+
+        if session and user_id:
+            sessions = self.locator.list_sessions()
+            detected_map = self.map_locator.locate_details(session)
+            detected_name = detected_map["name"]
+
+            if detected_name and detected_map["claimable"]:
+                owner = self.store.map_owner(sessions, detected_name)
+                if owner is None:
+                    try:
+                        self.store.claim_map(session, user_id, detected_name)
+                    except Exception as exc:
+                        print(
+                            "Map ownership storage failed for {}: {}".format(
+                                detected_name, exc
+                            )
+                        )
+
+            map_name = self.store.latest_map_for_user(
+                sessions,
+                user_id,
+                preferred_map=detected_name,
+            )
 
         return {
             "ready": all(
@@ -548,7 +833,7 @@ class ChatApplication:
             "session_ready": session_ready,
             "session_id": session["session_id"] if session else "",
             "session_status": session["status"] if session else "not found",
-            "map_name": session["map_name"] if session else "",
+            "map_name": map_name,
             "stored_exchange_count": self.store.count(session) if session else 0,
             "model": NVIDIA_MODEL,
         }
@@ -673,6 +958,10 @@ class ChatRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlsplit(self.path).path
+        if path == "/api/status":
+            self._handle_status()
+            return
+
         if path == "/api/api-key":
             self._handle_api_key()
             return
@@ -892,6 +1181,29 @@ class ChatRequestHandler(BaseHTTPRequestHandler):
                 "message": "API key is ready in memory for this UI session.",
             },
         )
+
+    def _handle_status(self):
+        payload = self._read_json_payload()
+        if payload is None:
+            return
+
+        user_id = payload.get("user_id", "")
+        if not isinstance(user_id, str):
+            user_id = ""
+        user_id = user_id.strip()
+
+        if len(user_id) > MAX_USER_ID_LENGTH:
+            self._send_json(400, {"error": "User ID is too long."})
+            return
+        if user_id and has_control_characters(user_id):
+            self._send_json(
+                400, {"error": "User ID contains invalid characters."}
+            )
+            return
+
+        status = self.server.application.status(user_id=user_id)
+        status["api_key_entry_allowed"] = self._is_loopback_client()
+        self._send_json(200, status)
 
     def _handle_history(self):
         payload = self._read_json_payload()

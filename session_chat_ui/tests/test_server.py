@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 import subprocess
@@ -13,6 +14,7 @@ if str(UI_DIR) not in sys.path:
     sys.path.insert(0, str(UI_DIR))
 
 import server  # noqa: E402
+import rag_compat  # noqa: E402
 
 
 def create_session_database(runtime_dir, session_id, status, started_at_ns):
@@ -71,6 +73,84 @@ class SessionLocatorTest(unittest.TestCase):
             sessions = server.SessionLocator(runtime_dir=directory).list_sessions()
 
             self.assertEqual(sessions, [])
+
+    def test_uses_latest_task_event_map_when_session_map_is_blank(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = create_session_database(
+                directory, "mapped_session", "running", 100
+            )
+            connection = sqlite3.connect(str(database))
+            connection.execute("UPDATE sessions SET map_name = NULL")
+            connection.execute(
+                """
+                CREATE TABLE task_events (
+                    session_id TEXT NOT NULL,
+                    event_time_ns INTEGER NOT NULL,
+                    map_name TEXT
+                )
+                """
+            )
+            connection.executemany(
+                "INSERT INTO task_events VALUES (?, ?, ?)",
+                [
+                    ("mapped_session", 200, "old_map"),
+                    ("mapped_session", 300, "new_map"),
+                ],
+            )
+            connection.commit()
+            connection.close()
+
+            located = server.SessionLocator(runtime_dir=directory).locate()
+
+            self.assertEqual(located["map_name"], "new_map")
+
+
+class MapStatusLocatorTest(unittest.TestCase):
+    def test_prefers_active_navigation_map(self):
+        locator = server.MapStatusLocator(maps_dir="/missing")
+        locator._read_status = mock.Mock(
+            side_effect=[{"active_map": "active_map.pgm"}, {}]
+        )
+
+        self.assertEqual(locator.locate({"map_name": "database_map"}), "active_map")
+
+    def test_detects_map_created_during_session(self):
+        with tempfile.TemporaryDirectory() as directory:
+            maps_dir = Path(directory)
+            yaml_path = maps_dir / "new_robot_map.yaml"
+            pgm_path = maps_dir / "new_robot_map.pgm"
+            yaml_path.touch()
+            pgm_path.touch()
+            modified_ns = yaml_path.stat().st_mtime_ns
+            locator = server.MapStatusLocator(maps_dir=maps_dir)
+            locator._read_status = mock.Mock(return_value={})
+
+            found = locator.locate(
+                {"started_at_ns": modified_ns - 1, "map_name": ""}
+            )
+
+            self.assertEqual(found, "new_robot_map")
+
+    def test_marks_active_map_claimable_only_when_created_in_session(self):
+        with tempfile.TemporaryDirectory() as directory:
+            maps_dir = Path(directory)
+            (maps_dir / "active.yaml").touch()
+            (maps_dir / "active.pgm").touch()
+            modified_ns = (maps_dir / "active.yaml").stat().st_mtime_ns
+            locator = server.MapStatusLocator(maps_dir=maps_dir)
+            locator._read_status = mock.Mock(
+                return_value={"active_map": "active.pgm"}
+            )
+
+            current = locator.locate_details(
+                {"started_at_ns": modified_ns - 1, "map_name": ""}
+            )
+            older = locator.locate_details(
+                {"started_at_ns": modified_ns + 1, "map_name": ""}
+            )
+
+            self.assertTrue(current["claimable"])
+            self.assertFalse(older["claimable"])
 
 
 class ChatStoreTest(unittest.TestCase):
@@ -250,6 +330,83 @@ class ChatStoreTest(unittest.TestCase):
                 history[1]["robot_response"], "The current run is active."
             )
 
+    def test_map_ownership_is_persistent_and_cannot_be_transferred(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = create_session_database(
+                directory, "map_session", "running", 100
+            )
+            session = {
+                "session_id": "map_session",
+                "database": database,
+            }
+            sessions = [session]
+            store = server.ChatStore()
+
+            self.assertTrue(store.claim_map(session, "user-a", "map-a"))
+            self.assertFalse(store.claim_map(session, "user-b", "map-a"))
+            self.assertTrue(store.claim_map(session, "user-b", "map-b"))
+
+            self.assertEqual(store.map_owner(sessions, "map-a"), "user-a")
+            self.assertEqual(
+                store.latest_map_for_user(sessions, "user-a", "map-a"),
+                "map-a",
+            )
+            self.assertEqual(
+                store.latest_map_for_user(sessions, "user-b", "map-b"),
+                "map-b",
+            )
+
+
+class UserFilteredStatusTest(unittest.TestCase):
+    class Locator:
+        def __init__(self, session):
+            self.session = session
+
+        def locate(self):
+            return self.session
+
+        def list_sessions(self):
+            return [self.session]
+
+    class MapLocator:
+        def __init__(self, name):
+            self.name = name
+
+        def locate_details(self, _session):
+            return {"name": self.name, "claimable": True}
+
+    def test_switching_user_ids_filters_maps_and_new_map_goes_to_active_user(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = create_session_database(
+                directory, "map_session", "running", 100
+            )
+            session = {
+                "session_id": "map_session",
+                "status": "running",
+                "started_at_ns": 100,
+                "map_name": "",
+                "database": database,
+            }
+            map_locator = self.MapLocator("map-a")
+            application = server.ChatApplication(
+                locator=self.Locator(session),
+                store=server.ChatStore(),
+                runner=object(),
+                map_locator=map_locator,
+            )
+
+            with mock.patch.object(application, "embedding_ready", return_value=True):
+                first_user = application.status(user_id="user-a")
+                second_user_before_mapping = application.status(user_id="user-b")
+                map_locator.name = "map-b"
+                second_user_after_mapping = application.status(user_id="user-b")
+                first_user_again = application.status(user_id="user-a")
+
+            self.assertEqual(first_user["map_name"], "map-a")
+            self.assertEqual(second_user_before_mapping["map_name"], "")
+            self.assertEqual(second_user_after_mapping["map_name"], "map-b")
+            self.assertEqual(first_user_again["map_name"], "map-a")
+
 
 class RagRunnerTest(unittest.TestCase):
     def test_calls_core_rag_with_session_and_extracts_answer(self):
@@ -284,6 +441,8 @@ class RagRunnerTest(unittest.TestCase):
                 )
 
         command = run_command.call_args.args[0]
+        self.assertEqual(Path(command[1]), server.RAG_COMPAT_SCRIPT)
+        self.assertIn("--core-script", command)
         self.assertIn("--session-id", command)
         self.assertIn("20260824_abc1", command)
         self.assertIn("--question", command)
@@ -345,6 +504,86 @@ class RagRunnerTest(unittest.TestCase):
 
         self.assertNotIn(fake_key, raised.exception.details)
         self.assertIn("[REDACTED]", raised.exception.details)
+
+
+class RagCompatibilityTest(unittest.TestCase):
+    def test_installs_missing_map_helpers_without_overwriting_existing_helpers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            maps_dir = Path(directory)
+            (maps_dir / "lab.pgm").touch()
+            (maps_dir / "lab.yaml").touch()
+            (maps_dir / "lab_labels.json").write_text(
+                json.dumps(
+                    {
+                        "labels": [
+                            {
+                                "id": "one",
+                                "name": "station",
+                                "world": {"x": 1.0, "y": 2.0},
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            class CoreModule:
+                MAPS_DIR = maps_dir
+
+                @staticmethod
+                def normalize_map_name(_value):
+                    return "team-version"
+
+            original = CoreModule.normalize_map_name
+            rag_compat.install_missing_helpers(CoreModule)
+
+            current = CoreModule.load_current_map_metadata("lab.pgm")
+            saved = CoreModule.load_saved_maps_metadata()
+
+            self.assertIs(CoreModule.normalize_map_name, original)
+            self.assertEqual(current["map"], "lab")
+            self.assertEqual(current["label_count"], 1)
+            self.assertEqual(saved["map_count"], 1)
+
+    def test_wrapper_runs_a_core_main_that_references_missing_helpers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            temporary_dir = Path(directory)
+            maps_dir = temporary_dir / "maps"
+            maps_dir.mkdir()
+            (maps_dir / "active.pgm").touch()
+            (maps_dir / "active.yaml").touch()
+            (maps_dir / "active_labels.json").write_text(
+                json.dumps({"labels": [{"id": "one", "name": "desk"}]}),
+                encoding="utf-8",
+            )
+            core_script = temporary_dir / "core.py"
+            core_script.write_text(
+                "from pathlib import Path\n"
+                "MAPS_DIR = Path({!r})\n"
+                "def main():\n"
+                "    current = load_current_map_metadata('active.pgm')\n"
+                "    saved = load_saved_maps_metadata()\n"
+                "    print(current['map'], current['label_count'], saved['map_count'])\n".format(
+                    str(maps_dir)
+                ),
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(rag_compat.__file__)),
+                    "--core-script",
+                    str(core_script),
+                    "--",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(completed.stdout.strip(), "active 1 1")
 
 
 class ApiKeyMemoryTest(unittest.TestCase):

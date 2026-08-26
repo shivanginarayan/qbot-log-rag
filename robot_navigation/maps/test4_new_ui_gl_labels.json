@@ -1,0 +1,34 @@
+{
+  "map": "test4_new_ui_gl.pgm",
+  "yaml": "test4_new_ui_gl.yaml",
+  "labels": [
+    {
+      "id": "mapping-3-1",
+      "name": "label1",
+      "kind": "navigation",
+      "detail": "Dropped from the gamepad during mapping",
+      "source": "mapping_gamepad",
+      "world": {
+        "x": 1.1400000000000001,
+        "y": 0.019999999999999574
+      },
+      "yaw": 0.016434047907900855,
+      "x": 399.0,
+      "y": 203.0
+    },
+    {
+      "id": "origin",
+      "name": "origin",
+      "kind": "navigation",
+      "detail": "Robot origin",
+      "source": "auto",
+      "x": 285.0,
+      "y": 205.0,
+      "world": {
+        "x": 0.0,
+        "y": 0.0
+      },
+      "yaw": 0.0
+    }
+  ]
+}

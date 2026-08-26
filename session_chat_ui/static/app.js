@@ -203,7 +203,13 @@ async function loadChatHistory(userId) {
 
 async function refreshStatus() {
   try {
-    const response = await fetch("/api/status", { cache: "no-store" });
+    const currentUserId = userIdInput.value.trim();
+    const response = await fetch("/api/status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+      body: JSON.stringify({ user_id: currentUserId }),
+    });
     if (!response.ok) {
       throw new Error("Status request failed");
     }
@@ -229,7 +235,8 @@ async function refreshStatus() {
     sessionId.textContent = data.session_id || "Not found";
     sessionId.title = data.session_id || "";
     sessionState.textContent = data.session_status || "Unknown";
-    mapName.textContent = data.map_name || "Not recorded";
+    mapName.textContent = data.map_name
+      || (currentUserId ? "No maps for this user" : "Enter User ID");
     mapName.title = data.map_name || "";
     storedCount.textContent = String(data.stored_exchange_count || 0);
 
@@ -349,15 +356,20 @@ userIdInput.addEventListener("input", () => {
 
   if (!userId) {
     historyRequestNumber += 1;
+    refreshStatus();
     return;
   }
 
-  historyLoadTimer = setTimeout(() => loadChatHistory(userId), 500);
+  historyLoadTimer = setTimeout(() => {
+    loadChatHistory(userId);
+    refreshStatus();
+  }, 500);
 });
 
 userIdInput.addEventListener("change", () => {
   clearTimeout(historyLoadTimer);
   loadChatHistory(userIdInput.value);
+  refreshStatus();
 });
 
 chatForm.addEventListener("submit", async (event) => {

@@ -1,10 +1,10 @@
 {
-  "name": "door",
+  "name": "label3",
   "kind": "navigation",
-  "detail": "",
+  "detail": "Dropped from the gamepad during mapping",
   "world": {
-    "x": 1.2400000000000002,
-    "y": 2.780000000000001
+    "x": -2.51,
+    "y": 1.1400000000000006
   },
   "status": 4
 }

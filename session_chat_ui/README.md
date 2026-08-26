@@ -57,6 +57,19 @@ http://ROBOT_IP:8766
 
 The existing map-labeler uses port 8765, so both interfaces can run together.
 
+The chat remains available while AMCL or Cartographer navigation is running.
+The UI launches the unchanged team RAG module through `rag_compat.py`, which
+supplies map-metadata helpers only if they are missing from that module. This
+avoids the navigation-time map lookup crash without editing the team's RAG or
+navigation files. The Map field follows the active map-labeler state and falls
+back to maps created or recorded during the current experiment.
+
+New maps are assigned to the User ID currently entered in the chat UI. The
+assignment is stored in the additive `ui_user_maps` table and is never moved to
+another user automatically. Switching User IDs changes the Map field to that
+user's most recently assigned map; an ID with no maps sees "No maps for this
+user." Enter the intended User ID before starting a new map in the map UI.
+
 The standalone `./session_chat_ui/run_ui.sh` command remains available for
 development, but it is not needed for the normal experiment.
 
@@ -66,10 +79,11 @@ is already part of the project environment.
 
 ## Database record
 
-The UI creates one additive table inside the selected session database:
+The UI creates two additive tables inside the selected session database:
 
 ```text
 ui_chat_interactions
+ui_user_maps
 ```
 
 Important columns are:
@@ -82,6 +96,9 @@ Important columns are:
 - `audience`
 - `asked_at_iso` and `answered_at_iso`
 - `model`, retrieval count, response time, and error details
+
+`ui_user_maps` stores only the session ID, map name, owning User ID, and the
+time that ownership was first detected.
 
 To inspect the stored exchanges after a session:
 

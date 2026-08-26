@@ -1,0 +1,62 @@
+{
+  "map": "test_1_after_new_ui_gl.pgm",
+  "yaml": "test_1_after_new_ui_gl.yaml",
+  "labels": [
+    {
+      "id": "mapping-1-1",
+      "name": "label1",
+      "kind": "navigation",
+      "detail": "Dropped from the gamepad during mapping",
+      "source": "mapping_gamepad",
+      "world": {
+        "x": 1.94,
+        "y": -0.6699999999999999
+      },
+      "yaw": 0.2605749655135682,
+      "x": 529.0,
+      "y": 527.0
+    },
+    {
+      "id": "mapping-1-2",
+      "name": "label2",
+      "kind": "navigation",
+      "detail": "Dropped from the gamepad during mapping",
+      "source": "mapping_gamepad",
+      "world": {
+        "x": 2.53,
+        "y": -0.47999999999999954
+      },
+      "yaw": 0.28987730947218654,
+      "x": 588.0,
+      "y": 508.0
+    },
+    {
+      "id": "mapping-1-3",
+      "name": "label3",
+      "kind": "navigation",
+      "detail": "Dropped from the gamepad during mapping",
+      "source": "mapping_gamepad",
+      "world": {
+        "x": 0.7600000000000002,
+        "y": -0.7599999999999998
+      },
+      "yaw": 0.9110155710875958,
+      "x": 411.0,
+      "y": 536.0
+    },
+    {
+      "id": "origin",
+      "name": "origin",
+      "kind": "navigation",
+      "detail": "Robot origin",
+      "source": "auto",
+      "x": 335.0,
+      "y": 460.0,
+      "world": {
+        "x": 0.0,
+        "y": 8.881784197001252e-16
+      },
+      "yaw": 0.0
+    }
+  ]
+}
