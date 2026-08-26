@@ -15,6 +15,10 @@ from build_evidence_packet import (
     build_live_packet,
 )
 
+from generic_event_query import (
+    plan_and_query_events,
+)
+
 
 MODEL_EMBED = "bge-m3"
 
@@ -58,6 +62,9 @@ MAPS_DIR = (
     / "robot_navigation"
     / "maps"
 )
+# ============================================================
+# TASK INTENT MEMORY
+# ============================================================
 
 def search_intents(
     query_vector,
@@ -97,7 +104,10 @@ def search_intents(
 
     return results
 
-def load_intent_record(label_key,):
+
+def load_intent_record(
+    label_key,
+):
     with dbm.open(
         INTENT_INDEX,
         "r",
@@ -115,6 +125,7 @@ def load_intent_record(label_key,):
                 "utf-8"
             )
         )
+
 
 def asks_about_nonexecution(
     question,
@@ -139,6 +150,7 @@ def asks_about_nonexecution(
         phrase in q
         for phrase in phrases
     )
+
 
 def collect_intent_occurrences(
     intent_hit,
@@ -194,6 +206,10 @@ def collect_intent_occurrences(
     return occurrences
 
 
+# ============================================================
+# EMBEDDINGS
+# ============================================================
+
 def normalize(vector):
     norm = math.sqrt(
         sum(
@@ -236,6 +252,7 @@ def embed(text):
         request,
         timeout=120,
     ) as response:
+
         data = json.loads(
             response
             .read()
@@ -253,6 +270,10 @@ def cosine(a, b):
         for x, y in zip(a, b)
     )
 
+
+# ============================================================
+# GLOBAL MEMORY
+# ============================================================
 
 def search_global(
     query_vector,
@@ -293,6 +314,10 @@ def search_global(
     return results
 
 
+# ============================================================
+# MAP MEMORY
+# ============================================================
+
 def map_embedding_files(
     requested_map=None,
 ):
@@ -302,6 +327,7 @@ def map_embedding_files(
     )
 
     if requested_map:
+
         path = (
             root
             / requested_map
@@ -330,12 +356,15 @@ def search_maps(
     for path in map_embedding_files(
         requested_map
     ):
+
         try:
+
             data = json.loads(
                 path.read_text(
                     encoding="utf-8"
                 )
             )
+
         except Exception:
             continue
 
@@ -343,6 +372,7 @@ def search_maps(
             "records",
             [],
         ):
+
             score = cosine(
                 query_vector,
                 record["embedding"],
@@ -421,6 +451,10 @@ def load_global_record(
         )
 
 
+# ============================================================
+# OCCURRENCE SELECTION
+# ============================================================
+
 def outcome_status(
     occurrence,
 ):
@@ -480,6 +514,7 @@ def choose_occurrences(
     selected = occurrences
 
     if desired:
+
         filtered = [
             occurrence
             for occurrence
@@ -531,12 +566,14 @@ def collect_map_occurrences(
             {}
         ).items()
     ):
+
         for occurrence in (
             task_data.get(
                 "occurrences",
                 []
             )
         ):
+
             item = dict(
                 occurrence
             )
@@ -586,8 +623,9 @@ def collect_global_occurrences(
 
     for occurrence in record.get(
         "occurrences",
-        []
+        [],
     ):
+
         item = dict(
             occurrence
         )
@@ -613,6 +651,7 @@ def deduplicate_occurrences(
     seen = set()
 
     for occurrence in occurrences:
+
         occurrence_id = (
             occurrence.get(
                 "occurrence_id"
@@ -632,6 +671,10 @@ def deduplicate_occurrences(
 
     return result
 
+
+# ============================================================
+# EVIDENCE PACKETS
+# ============================================================
 
 def occurrence_packet(
     occurrence,
@@ -694,6 +737,7 @@ def occurrence_packet(
     }
 
     return packet
+
 
 def intent_occurrence_packet(
     occurrence,
@@ -775,6 +819,250 @@ def intent_occurrence_packet(
     return packet
 
 
+    # ========================================================
+    # CURRENT MAP / SAVED MAP METADATA
+    # ========================================================
+
+    current_map_metadata = None
+    saved_maps_metadata = None
+    structured_event_query = None
+
+
+    # --------------------------------------------------------
+    # Current map comes from the live runtime packet
+    # when available.
+    # --------------------------------------------------------
+
+    if live_packet is not None:
+
+        live_info = (
+            live_packet.get(
+                "live_session"
+            )
+            or {}
+        )
+
+        current_map_name = (
+            live_info.get(
+                "map"
+            )
+        )
+
+        if current_map_name:
+
+            current_map_metadata = (
+                load_current_map_metadata(
+                    current_map_name
+                )
+            )
+
+
+    # --------------------------------------------------------
+    # Saved-map inventory is independent of the live session.
+    # It reads the actual maps directory.
+    # --------------------------------------------------------
+
+    if asks_about_saved_maps(
+        question
+    ):
+
+        saved_maps_metadata = (
+            load_saved_maps_metadata()
+        )
+
+
+    # ========================================================
+    # GENERIC STRUCTURED EVENT QUERY
+    #
+    # This is intentionally NOT inside the live_packet block.
+    #
+    # It can search recorded task events across all sessions
+    # even if there is no active robot session.
+    # ========================================================
+
+    try:
+
+        structured_event_query = (
+            plan_and_query_events(
+                question,
+                current_session_id=(
+                    args.session_id
+                ),
+                current_map=(
+                    current_map_name
+                ),
+            )
+        )
+
+    except Exception as exc:
+
+        print(
+            "WARNING: Structured event query "
+            "could not be completed:"
+        )
+
+        print(
+            f"  {exc}"
+        )
+
+        structured_event_query = {
+            "used":
+                False,
+
+            "error":
+                str(exc),
+        }
+
+def asks_about_current_map(
+    question,
+):
+    q = question.casefold()
+
+    phrases = [
+        "current map",
+        "this map",
+        "map are you using",
+        "which map",
+        "what map",
+        "active map",
+    ]
+
+    return any(
+        phrase in q
+        for phrase in phrases
+    )
+
+
+def asks_about_labels(
+    question,
+):
+    q = question.casefold()
+
+    return (
+        "label" in q
+        or "labels" in q
+    )
+
+
+def asks_about_current_pose(
+    question,
+):
+    q = question.casefold()
+
+    phrases = [
+        "where are you",
+        "where is the robot",
+        "current position",
+        "current pose",
+        "where are you now",
+    ]
+
+    return any(
+        phrase in q
+        for phrase in phrases
+    )
+
+
+def asks_for_history(
+    question,
+):
+    q = question.casefold()
+
+    phrases = [
+        "before",
+        "previous",
+        "previously",
+        "earlier",
+        "last time",
+        "used to",
+        "usually",
+        "historically",
+        "has this happened",
+        "ever happened",
+        "have you done",
+        "has the robot done",
+        "compared to",
+        "different from",
+    ]
+
+    return any(
+        phrase in q
+        for phrase in phrases
+    )
+
+
+def asks_about_live_state(
+    question,
+):
+    q = question.casefold()
+
+    phrases = [
+        "now",
+        "current",
+        "currently",
+        "active",
+        "what map",
+        "which map",
+        "localized",
+        "localised",
+        "localization",
+        "localisation",
+        "amcl",
+        "where are you",
+        "what are you doing",
+        "why is it not",
+        "why isn't it",
+        "why is the robot not",
+        "why isn't the robot",
+        "is it moving",
+        "are you moving",
+        "what do you see",
+        "why did localization fail",
+        "why did localisation fail",
+        "planner",
+        "controller",
+        "bt navigator",
+        "map server",
+        "nav2",
+        "ros node",
+        "ros topic",
+        "ros service",
+    ]
+
+    return any(
+        phrase in q
+        for phrase in phrases
+    )
+
+def asks_about_saved_maps(
+    question,
+):
+    q = question.casefold()
+
+    phrases = [
+        "saved maps",
+        "maps saved",
+        "how many maps",
+        "how many maps are saved",
+        "what maps are saved",
+        "which maps are saved",
+        "list maps",
+        "list the maps",
+        "available maps",
+        "maps available",
+        "what maps exist",
+        "which maps exist",
+    ]
+
+    return any(
+        phrase in q
+        for phrase in phrases
+    )
+
+# ============================================================
+# LLM PROMPT
+# ============================================================
+
 def build_llm_prompt(
     question,
     map_hits,
@@ -783,6 +1071,7 @@ def build_llm_prompt(
     audience,
     live_packet=None,
 ):
+
     retrieval_summary = {
         "map_matches": [
             {
@@ -824,6 +1113,7 @@ def build_llm_prompt(
             for hit in global_hits[:2]
         ],
     }
+
     if live_packet is not None:
 
         retrieval_summary[
@@ -835,91 +1125,91 @@ def build_llm_prompt(
         )
 
     if audience == "developer":
+
         audience_instructions = """
-    AUDIENCE: DEVELOPER
+AUDIENCE: DEVELOPER
 
-    Write a technical diagnostic explanation.
+Write a technical diagnostic explanation.
 
-    You may use internal terminology when it is useful,
-    including:
-    - NAVIGATION_COMMAND
-    - NAVIGATION_STARTED
-    - NAVIGATION_FINISHED
-    - cmd_vel
-    - wheel odometry
-    - AMCL
-    - LiDAR
-    - Nav2 status values
-    - event timing
-    - session evidence
+You may use internal terminology when useful, including:
+- NAVIGATION_COMMAND
+- NAVIGATION_STARTED
+- NAVIGATION_FINISHED
+- cmd_vel
+- wheel odometry
+- AMCL
+- LiDAR
+- Nav2
+- ROS nodes/topics/services
+- lifecycle state
+- status values
+- event timing
+- session evidence
 
-    Include useful numerical measurements.
+Include useful numerical measurements.
 
-    Explain which facts are directly recorded,
-    which values are derived, and which explanations
-    are hypotheses.
+Explain which facts are directly recorded,
+which values are derived, and which explanations
+are hypotheses.
 
-    When evidence is missing, identify what additional
-    logging or subsystem evidence would be useful.
+When evidence is missing, identify what additional
+logging or subsystem evidence would be useful.
 
-    Do not simplify away important technical details.
-    """.strip()
+Do not simplify away important technical details.
+""".strip()
 
     else:
+
         audience_instructions = """
-    AUDIENCE: END USER
+AUDIENCE: END USER
 
-    Write for a person using the robot, not for
-    a robotics developer.
+Write for a person using the robot, not for
+a robotics developer.
 
-    Use plain, natural language.
+Use plain, natural language.
 
-    Focus on:
-    - what the robot was asked to do,
-    - what actually happened,
-    - what the robot could observe,
-    - and what can or cannot be concluded.
+Focus on:
+- what the robot was asked to do,
+- what actually happened,
+- what the robot can currently observe or report,
+- and what can or cannot be concluded.
 
-    Do NOT expose internal implementation details
-    unless they are necessary to understand the answer.
+Do NOT expose internal implementation details unless
+they are necessary to understand the answer.
 
-    Normally avoid terms such as:
-    - NAVIGATION_COMMAND
-    - NAVIGATION_STARTED
-    - NAVIGATION_FINISHED
-    - event_time_ns
-    - cmd_vel
-    - AMCL
-    - ROS
-    - SQLite
-    - raw status codes
-    - internal occurrence IDs
-    - session IDs
+Normally avoid terms such as:
+- NAVIGATION_COMMAND
+- NAVIGATION_STARTED
+- NAVIGATION_FINISHED
+- event_time_ns
+- cmd_vel
+- ROS
+- SQLite
+- raw status codes
+- internal occurrence IDs
+- session IDs
 
-    Translate technical evidence into user-facing
-    language.
+Technical terms such as AMCL or Nav2 may be used when
+the user explicitly asks about them.
 
-    For example:
-    "no cmd_vel intervals were recorded"
-    should normally become:
-    "the robot did not receive movement commands."
+Translate technical evidence into user-facing language.
 
-    "No NAVIGATION_STARTED event was recorded"
-    should normally become:
-    "the navigation never began."
+For example:
+"no cmd_vel intervals were recorded"
+should normally become:
+"the robot did not receive movement commands."
 
-    "wheel odometry estimated 0.0008 m displacement"
-    may become:
-    "the robot remained essentially in place."
+"No NAVIGATION_STARTED event was recorded"
+should normally become:
+"there is no recorded evidence that navigation began."
 
-    Keep the answer concise.
-    Do not overwhelm the user with raw numbers unless
-    a number materially helps answer the question.
-    """.strip()
+Keep the answer concise.
+Do not overwhelm the user with raw numbers unless
+a number materially helps answer the question.
+""".strip()
 
     return f"""
-You are explaining robot behavior using
-recorded evidence.
+You are explaining robot behavior using supplied evidence.
 
 {audience_instructions}
 
@@ -942,177 +1232,276 @@ GROUNDING RULES:
    - hypotheses or possible explanations.
 
 3. Wheel odometry is an estimate.
-   Never describe odometry displacement as
-   guaranteed physical chassis movement.
+   Never describe odometry displacement as guaranteed
+   physical chassis movement.
 
    Do not say the robot moved "toward the goal"
-   unless the goal coordinates and observed pose
-   support that conclusion.
+   unless goal coordinates and observed pose support it.
 
-   Do not infer that a destination was or was not
-   physically reached solely from odometry distance.
+4. A Nav2 success or failure status is the navigation
+   system's decision. It is not independent proof of
+   physical success or failure.
 
-4. A Nav2 success or failure status is the
-   navigation system's decision. It is not
-   independent proof of physical success
-   or failure.
+5. Do not infer causality merely because one event
+   occurred before another.
 
-5. Do not infer causality merely because
-   one event occurred before another.
+6. If LiDAR suggests a nearby obstacle, you may say
+   the evidence is consistent with an obstacle being
+   nearby. Do not say that obstacle caused a failure
+   unless evidence establishes that.
 
-6. If LiDAR suggests a nearby obstacle,
-   you may say the evidence is consistent
-   with obstruction. Do not claim an
-   obstacle definitely caused a failure
-   unless the evidence establishes that.
+7. If evidence is insufficient to answer "why",
+   explicitly say what is known and what cannot
+   be concluded.
 
-7. If the evidence is insufficient to
-   answer "why", explicitly say what is
-   known and what cannot be concluded.
+8. Do not invent missing labels, map coordinates,
+   sensor readings, status messages, events, nodes,
+   topics, services, or causes.
 
-8. Do not invent missing labels, map
-   coordinates, sensor readings, status
-   messages, or events.
-
-9. Prefer concise explanations with the
-   most relevant evidence and numerical
-   values where useful.
+9. Prefer concise explanations using the most
+   relevant evidence.
 
 10. A failed navigation status does not identify
     which Nav2 component caused the failure.
-    Do not attribute failure specifically to the
-    planner, controller, localization, obstacle
-    avoidance, or hardware unless corresponding
-    evidence is present.
 
-11. Do not invent citation markers, reference
-    numbers, source links, or bracketed citations.
-    Refer to evidence naturally, for example:
-    "The recorded task event shows..." or
-    "LiDAR recorded..."
+11. Do not invent citation markers, reference numbers,
+    source links, or bracketed citations.
 
-12. NAVIGATION_COMMAND represents a recorded
-    request or intent. It does not prove that
-    navigation execution began.
+12. NAVIGATION_COMMAND represents a recorded request.
+    It does not prove navigation execution began.
 
-13. If there is a NAVIGATION_COMMAND but no
-    matching NAVIGATION_STARTED, say:
+13. If there is a NAVIGATION_COMMAND but no matching
+    NAVIGATION_STARTED, say:
     "No execution-start event was recorded."
-    Do not claim that Nav2 definitely never
-    received the goal unless the evidence proves it.
 
-14. If no velocity command was recorded during
-    the relevant interval, you may say that no
-    cmd_vel motion command was recorded.
+    Do not claim that Nav2 definitely never received
+    the goal unless evidence proves it.
 
-15. Passive odometry, LiDAR, TF, or localization
-    data may continue even when a requested task
-    is not executing. Do not treat passive sensor
-    data as proof that navigation started.
+14. If no velocity command was recorded during the
+    relevant interval, you may say no motion command
+    was recorded.
 
-16. If a request was recorded but the evidence
-    does not identify why execution did not start,
-    explicitly say that the cause is unknown from
-    the available logs.
+15. Passive odometry, LiDAR, TF, or localization data
+    may continue even when a requested task is not
+    executing.
 
-17. Change only the explanation level based on
-    the audience. Do not change the underlying
-    factual conclusion based on whether the reader
-    is a user or developer.
+16. If a request was recorded but evidence does not
+    identify why execution did not start, say the cause
+    is unknown from the available evidence.
 
-18. A live session is not a completed historical occurrence.
+17. Audience changes explanation style only.
+    It must not change the factual conclusion.
+
+18. A live session is not a completed historical
+    occurrence.
 
 19. If current_navigation.state is
     "navigation_requested_waiting_for_start",
-    say that the request has been recorded but no
-    execution-start event has been recorded yet.
-    Do not call it a failure simply because STARTED
-    has not arrived yet.
+    the request exists but no execution-start event
+    has yet been recorded.
+
+    Do not call this a failure simply because STARTED
+    has not arrived.
 
 20. If current_navigation.state is
-    "navigation_in_progress",
-    the task is still executing.
-    Do not describe it as failed, interrupted,
-    unfinished, or successful unless a corresponding
-    completion event exists.
+    "navigation_in_progress", the task is still
+    executing.
 
-21. Current-session SQLite evidence has priority for
-    questions about what the robot is doing now,
-    where it is now, why it is currently moving,
-    or what just happened.
+    Do not describe it as failed, interrupted or
+    successful unless a completion event exists.
 
-22. Historical memories may be used for comparison,
-    such as "Has this happened before?" or
-    "Why is this different from previous runs?"
+21. Current-session evidence has priority for questions
+    about what the robot is doing now, where it is now,
+    why it is currently moving, or what just happened.
 
-23. Do not treat the absence of a FINISHED event in
-    an active session as evidence that the task was
-    interrupted. It may simply still be running.
+22. Historical memories are primarily for questions
+    about previous behavior, repetition, comparison,
+    patterns, or past occurrences.
 
-24. For questions about the current map or the labels
-    currently defined on that map, prefer
-    current_map_metadata over historical map memory.
+23. Do not treat absence of a FINISHED event in an
+    active session as evidence that the task was
+    interrupted.
+
+24. For questions about the current map or labels,
+    prefer current_map_metadata and live runtime
+    information over historical map memory.
 
 25. The historical map behavior index contains executed
-    behavior occurrences and may not contain every label
-    defined in the current map.
+    behavior occurrences and may not contain every
+    defined label.
 
-26. If current_map_metadata provides label_count or labels,
-    use those values directly when answering questions such
-    as "how many labels are there?" or "what labels are on
-    this map?"
+26. If current_map_metadata provides label_count or
+    labels, use those values directly.
 
-27. Do not infer the current map from the highest-scoring
-    historical semantic match when live current-session map
-    information is available.
+27. Never infer the current map from historical semantic
+    similarity when live current-map information exists.
 
-28. A null or missing map value in SQLite does NOT mean
-    that no map is loaded. It only means that the recorded
-    SQLite evidence has not identified the map.
+28. A null map value in SQLite does not mean no map is
+    loaded. It only means SQLite has not identified it.
 
-29. When live navigation runtime status provides
-    active_map, use that as the current runtime map.
+29. If navigation_runtime provides active_map, treat
+    that as the current map reported by the runtime.
 
-30. Distinguish live runtime state from recorded historical
-    evidence. For example, say:
-    "The navigation runtime currently reports map1234.pgm."
-    Do not claim that SQLite recorded the map if it did not.
+30. Clearly distinguish current runtime status from
+    historical recorded evidence.
 
-31. A localization_state such as "in_progress" means the
-    runtime reports localization is currently underway.
-    Do not describe the robot as localized unless the
+31. A localization_state such as "in_progress" means
+    localization is currently underway.
+
+    Do not say the robot is localized unless the
     localized field is true.
 
-32. Zero AMCL pose samples do not prove why localization failed.
-    They only show that no AMCL pose samples were recorded.
+32. Direct live ROS graph evidence has priority for
+    questions about whether ROS nodes, topics, services,
+    or lifecycle components currently exist.
 
-33. Lack of robot motion does not prove that localization failed
-    because the robot did not move.
+33. If important_node_presence["/amcl"] is false,
+    you may state that /amcl is not present in the
+    current ROS graph.
 
-34. If the ROS graph explicitly shows that /amcl does not exist,
-    you may state that AMCL is not currently running.
+34. If /amcl is absent and /amcl_pose is absent,
+    you may state that AMCL is not currently producing
+    pose output.
 
-35. Do not infer why a ROS node is absent unless process logs,
-    launch logs, lifecycle errors, or explicit runtime messages
-    identify the cause.
+35. A missing ROS node does NOT establish why the node
+    failed to launch, exited, crashed, or was omitted.
 
-36. If a runtime message says "verify AMCL is active", treat that
-    as a diagnostic hint, not proof of the underlying cause.
+    Do not state the underlying reason unless launch,
+    process, lifecycle, or explicit runtime evidence
+    identifies it.
 
-37. For questions such as "is AMCL active?", direct ROS graph
-    evidence should take priority over historical memory and
-    indirect evidence such as missing pose samples.
+36. Zero localization samples do not prove why
+    localization failed. They only show no localization
+    samples were recorded in the relevant interval.
+
+37. Lack of robot motion does not prove localization
+    failed because the robot did not move.
+
+38. Nearby LiDAR obstacles do not prove they prevented
+    localization or navigation.
+
+39. A message such as "verify AMCL is active" is a
+    diagnostic hint, not proof of the root cause.
+
+40. For current-state questions, historical semantic
+    similarity scores are not evidence about the
+    robot's present state.
+
+41. If current_navigation.state is
+    "no_navigation_request_recorded", say only that
+    no navigation request is recorded in the current
+    session evidence.
+
+    Do not turn that into:
+    "the robot definitely never received a request"
+    unless direct evidence proves that.
+
+42. When answering "why", distinguish a symptom from
+    a root cause.
+
+    For example:
+    "/amcl is absent"
+    is an observed runtime condition.
+
+    "AMCL crashed because of configuration"
+    is a causal explanation and must not be stated
+    without corresponding evidence.
+
+43. structured_event_query is the result of an exact
+    structured query over recorded task_events across
+    session databases.
+
+44. When structured_event_query.plan.operation is "count",
+    use structured_event_query.result.count as the exact
+    number of matching recorded events.
+
+45. Do not replace an exact structured-event count with
+    an inference from live state, semantic similarity,
+    sensor sample counts, or historical behavior memory.
+
+46. event_type matters.
+
+    LOCALIZE_COMMAND means a localization request was recorded.
+
+    NAVIGATION_COMMAND means a navigation request was recorded.
+
+    NAVIGATION_STARTED means execution was recorded as started.
+
+    NAVIGATION_FINISHED means a completion/result event was recorded.
+
+    Do not count STARTED and FINISHED as separate user requests.
+
+47. If the question asks how many times something was
+    requested or attempted, and the structured query filters
+    command events, answer using the command-event count.
+
+48. If the question asks how many times something succeeded,
+    failed, or completed, use matching completion/result events
+    rather than command count.
+
+49. A map assigned by map_source "current_runtime_map",
+    "session.map_name", or "nearest_map_event" is contextual
+    association. Preserve this distinction if it materially
+    affects confidence.
+
+50. If the structured query returns zero matches, say that
+    zero matching recorded events were found. Do not claim
+    the physical event definitely never occurred outside
+    the recorded evidence.
+
+51. structured_event_query has priority over fuzzy semantic
+    matches for exact counts, lists, grouping, and latest-event
+    questions.
+
+52. task_lifecycle links a recorded command to later
+    execution-start and completion events for the same task.
+
+53. When task_lifecycle is available, use it to distinguish:
+
+    request recorded,
+    execution started,
+    execution completed,
+    final outcome.
+
+54. If task_lifecycle.outcome is
+    "no_execution_start_recorded", say that no matching
+    execution-start event was recorded for that request.
+
+    Do not claim the subsystem definitely never received
+    the request unless direct evidence proves that.
+
+55. If task_lifecycle.outcome is
+    "started_no_completion_recorded", say execution started
+    but no matching completion event was recorded.
+
+    In an active session, do not automatically call this
+    interrupted or failed.
+
+56. If task_lifecycle has a completion and outcome,
+    use the recorded completion outcome when answering
+    what happened to that request.
+
+57. A task lifecycle establishes temporal/event relationship,
+    not root cause. STARTED followed by FINISHED failed does
+    not by itself explain why the task failed.
 
 Answer the user's question directly.
 """.strip()
 
 
-def call_nemotron(prompt):
+# ============================================================
+# NEMOTRON
+# ============================================================
+
+def call_nemotron(
+    prompt,
+):
     api_key = os.environ.get(
         "NVIDIA_API_KEY"
     )
 
     if not api_key:
+
         raise RuntimeError(
             "NVIDIA_API_KEY is not set."
         )
@@ -1132,14 +1521,19 @@ def call_nemotron(prompt):
 
             "messages": [
                 {
-                    "role": "user",
-                    "content": prompt,
+                    "role":
+                        "user",
+
+                    "content":
+                        prompt,
                 }
             ],
 
-            "temperature": 0.2,
+            "temperature":
+                0.2,
 
-            "max_tokens": 1600,
+            "max_tokens":
+                1600,
         },
         timeout=120,
     )
@@ -1156,180 +1550,10 @@ def call_nemotron(prompt):
         "content"
     ]
 
-def normalize_map_name(
-    map_name,
-):
-    if not map_name:
-        return None
 
-    name = Path(
-        str(map_name)
-    ).stem
-
-    if name.endswith(
-        "_labels"
-    ):
-        name = name[
-            :-len("_labels")
-        ]
-
-    return name
-
-
-def load_current_map_metadata(
-    map_name,
-):
-    map_name = normalize_map_name(
-        map_name
-    )
-
-    if not map_name:
-        return None
-
-    labels_path = (
-        MAPS_DIR
-        / f"{map_name}_labels.json"
-    )
-
-    result = {
-        "map":
-            map_name,
-
-        "labels_file":
-            str(labels_path),
-
-        "labels_file_exists":
-            labels_path.exists(),
-
-        "label_count":
-            None,
-
-        "labels":
-            [],
-    }
-
-    if not labels_path.exists():
-        return result
-
-    try:
-
-        data = json.loads(
-            labels_path.read_text(
-                encoding="utf-8"
-            )
-        )
-
-    except Exception as exc:
-
-        result[
-            "read_error"
-        ] = str(exc)
-
-        return result
-
-    labels = data.get(
-        "labels",
-        [],
-    )
-
-    if not isinstance(
-        labels,
-        list,
-    ):
-        labels = []
-
-    clean_labels = []
-
-    for label in labels:
-
-        if not isinstance(
-            label,
-            dict,
-        ):
-            continue
-
-        clean_labels.append(
-            {
-                "id":
-                    label.get("id"),
-
-                "name":
-                    label.get("name"),
-
-                "kind":
-                    label.get("kind"),
-
-                "detail":
-                    label.get("detail"),
-
-                "world":
-                    label.get("world"),
-
-                "yaw":
-                    label.get("yaw"),
-            }
-        )
-
-    result[
-        "labels"
-    ] = clean_labels
-
-    result[
-        "label_count"
-    ] = len(
-        clean_labels
-    )
-
-    return result
-
-
-def asks_about_current_map(
-    question,
-):
-    q = question.casefold()
-
-    phrases = [
-        "current map",
-        "this map",
-        "map are you using",
-        "which map",
-        "what map",
-    ]
-
-    return any(
-        phrase in q
-        for phrase in phrases
-    )
-
-
-def asks_about_labels(
-    question,
-):
-    q = question.casefold()
-
-    return (
-        "label" in q
-        or "labels" in q
-    )
-
-
-def asks_about_current_pose(
-    question,
-):
-    q = question.casefold()
-
-    phrases = [
-        "where are you",
-        "where is the robot",
-        "current position",
-        "current pose",
-        "where are you now",
-    ]
-
-    return any(
-        phrase in q
-        for phrase in phrases
-    )
+# ============================================================
+# MAIN
+# ============================================================
 
 def main():
     parser = argparse.ArgumentParser()
@@ -1362,7 +1586,7 @@ def main():
         default=None,
         help=(
             "Optional current session ID. "
-            "When supplied, live SQLite evidence "
+            "When supplied, live SQLite/runtime evidence "
             "is included in the answer."
         ),
     )
@@ -1380,8 +1604,11 @@ def main():
     args = parser.parse_args()
 
     question = args.question
-
+    # ========================================================
+    # LIVE EVIDENCE
+    # ========================================================
     live_packet = None
+    current_map_name = None
 
     if args.session_id:
 
@@ -1404,7 +1631,13 @@ def main():
                 f"  {exc}"
             )
 
+
+    # ========================================================
+    # CURRENT MAP METADATA
+    # ========================================================
+
     current_map_metadata = None
+    saved_maps_metadata = None
 
     if live_packet is not None:
 
@@ -1429,22 +1662,146 @@ def main():
                 )
             )
 
-    query_vector = embed(
-        question
+        # ========================================================
+        # GENERIC STRUCTURED EVENT QUERY
+        #
+        # Nemotron interprets the natural-language question.
+        # Python performs the exact query/count over every
+        # recorded task_events table.
+        # ========================================================
+
+        structured_event_query = None
+
+        try:
+
+            structured_event_query = (
+                plan_and_query_events(
+                    question,
+                    current_session_id=(
+                        args.session_id
+                    ),
+                    current_map=(
+                        current_map_name
+                    ),
+                )
+            )
+
+        except Exception as exc:
+
+            print(
+                "WARNING: Structured event query "
+                "could not be completed:"
+            )
+
+            print(
+                f"  {exc}"
+            )
+
+            structured_event_query = {
+                "used":
+                    False,
+
+                "error":
+                    str(exc),
+            }
+
+            if asks_about_saved_maps(
+                question
+            ):
+
+                saved_maps_metadata = (
+                    load_saved_maps_metadata()
+                )
+
+
+    # ========================================================
+    # QUESTION ROUTING
+    #
+    # Important:
+    #
+    # Purely live/current questions do NOT search old
+    # semantic memories.
+    #
+    # Historical retrieval is still enabled when the
+    # question asks about the past/comparison/history.
+    # ========================================================
+
+    historical_question = (
+        asks_for_history(
+            question
+        )
     )
 
-    map_hits = search_maps(
-        query_vector,
-        args.map,
+    live_question = (
+        args.session_id is not None
+        and (
+            asks_about_live_state(
+                question
+            )
+            or asks_about_current_map(
+                question
+            )
+            or asks_about_saved_maps(
+                question
+            )
+            or asks_about_labels(
+                question
+            )
+            or asks_about_current_pose(
+                question
+            )
+        )
     )
 
-    global_hits = search_global(
-        query_vector
+    structured_query_used = bool(
+        structured_event_query
+        and structured_event_query.get(
+            "used"
+        )
     )
 
-    intent_hits = search_intents(
-        query_vector
+
+    # --------------------------------------------------------
+    # If the structured event engine can answer the
+    # question exactly, we do not need fuzzy historical
+    # semantic retrieval.
+    #
+    # For non-structured questions the existing semantic
+    # behavior-memory path remains available.
+    # --------------------------------------------------------
+
+    use_historical_memory = (
+        not structured_query_used
+        and (
+            not live_question
+            or historical_question
+        )
     )
+
+
+    map_hits = []
+    global_hits = []
+    intent_hits = []
+
+
+    if use_historical_memory:
+
+        query_vector = embed(
+            question
+        )
+
+        map_hits = search_maps(
+            query_vector,
+            args.map,
+        )
+
+        global_hits = search_global(
+            query_vector
+        )
+
+        intent_hits = search_intents(
+            query_vector
+        )
 
     nonexecution_question = (
         asks_about_nonexecution(
@@ -1470,14 +1827,66 @@ def main():
         else None
     )
 
+
+    # ========================================================
+    # BUILD EVIDENCE PACKETS
+    # ========================================================
+
     packets = []
+
+    # --------------------------------------------------------
+    # Generic structured task-event evidence
+    # --------------------------------------------------------
+
+    if (
+        structured_event_query
+        and structured_event_query.get(
+            "used"
+        )
+    ):
+
+        packets.append(
+            {
+                "structured_event_query":
+                    structured_event_query,
+
+                "source_type":
+                    "all_session_task_events",
+            }
+        )
+
+    # --------------------------------------------------------
+    # Saved map inventory
+    # --------------------------------------------------------
+
+    if saved_maps_metadata is not None:
+
+        packets.append(
+            {
+                "saved_maps_metadata":
+                    saved_maps_metadata,
+
+                "source_type":
+                    "maps_directory",
+            }
+        )
+
+    # --------------------------------------------------------
+    # Current map metadata
+    # --------------------------------------------------------
+
     if current_map_metadata is not None:
 
         if (
-            asks_about_current_map(
-                question
+            (
+                asks_about_current_map(
+                    question
+                )
+                or asks_about_labels(
+                    question
+                )
             )
-            or asks_about_labels(
+            and not asks_about_saved_maps(
                 question
             )
         ):
@@ -1492,148 +1901,263 @@ def main():
                 }
             )
 
-     # Live/current SQLite evidence is independent
-    # from historical semantic memory.
-    #
-    # It is always available when --session-id
-    # identifies an active experiment.
+
+    # --------------------------------------------------------
+    # Current live evidence
+    # --------------------------------------------------------
+
     if live_packet is not None:
         packets.append(
             live_packet
         )
 
-    # --------------------------------------------------
-    # ROUTE 1:
-    # Question is about something that was requested
-    # but may never have started.
-    # Example:
-    # "Why didn't the robot go to test_point?"
-    # --------------------------------------------------
 
-    if nonexecution_question:
+    # --------------------------------------------------------
+    # Historical retrieval
+    #
+    # Only run this branch if routing decided history
+    # is actually relevant.
+    # --------------------------------------------------------
 
-        intent_occurrences = (
-            collect_intent_occurrences(
-                top_intent,
-                args.map,
-            )
-        )
+    if use_historical_memory:
 
-        # Prefer requests where no execution-start
-        # event was recorded.
-        no_start_occurrences = [
-            occurrence
-            for occurrence
-            in intent_occurrences
-            if occurrence.get("outcome")
-            == "no_execution_start_recorded"
-        ]
+        # ----------------------------------------------------
+        # Historical non-execution question
+        # ----------------------------------------------------
 
-        if no_start_occurrences:
+        if nonexecution_question:
+
             intent_occurrences = (
-                no_start_occurrences
+                collect_intent_occurrences(
+                    top_intent,
+                    args.map,
+                )
             )
 
-        # Use the most recent relevant request.
-        intent_occurrences = (
-            intent_occurrences[:1]
-        )
+            no_start_occurrences = [
+                occurrence
+                for occurrence
+                in intent_occurrences
+                if occurrence.get(
+                    "outcome"
+                )
+                == "no_execution_start_recorded"
+            ]
 
-        for occurrence in intent_occurrences:
+            if no_start_occurrences:
 
-            packet = (
-                intent_occurrence_packet(
+                intent_occurrences = (
+                    no_start_occurrences
+                )
+
+            intent_occurrences = (
+                intent_occurrences[:1]
+            )
+
+            for occurrence in intent_occurrences:
+
+                packet = (
+                    intent_occurrence_packet(
+                        occurrence
+                    )
+                )
+
+                if packet:
+
+                    packets.append(
+                        packet
+                    )
+
+        # ----------------------------------------------------
+        # Historical executed behavior
+        # ----------------------------------------------------
+
+        else:
+
+            occurrences = []
+
+            occurrences.extend(
+                collect_map_occurrences(
+                    top_map,
+                    question,
+                )
+            )
+
+            occurrences.extend(
+                collect_global_occurrences(
+                    top_global,
+                    question,
+                )
+            )
+
+            occurrences = (
+                deduplicate_occurrences(
+                    occurrences
+                )
+            )
+
+            for occurrence in occurrences:
+
+                packet = occurrence_packet(
                     occurrence
                 )
-            )
 
-            if packet:
-                packets.append(
-                    packet
-                )
+                if packet:
 
-    # --------------------------------------------------
-    # ROUTE 2:
-    # Normal executed-behavior question.
-    # Example:
-    # "Why did navigation under the table fail?"
-    # --------------------------------------------------
+                    packets.append(
+                        packet
+                    )
 
-    else:
 
-        occurrences = []
-
-        occurrences.extend(
-            collect_map_occurrences(
-                top_map,
-                question,
-            )
-        )
-
-        occurrences.extend(
-            collect_global_occurrences(
-                top_global,
-                question,
-            )
-        )
-
-        occurrences = (
-            deduplicate_occurrences(
-                occurrences
-            )
-        )
-
-        for occurrence in occurrences:
-
-            packet = occurrence_packet(
-                occurrence
-            )
-
-            if packet:
-                packets.append(
-                    packet
-                )
+    # ========================================================
+    # DEBUG / RETRIEVAL DISPLAY
+    # ========================================================
 
     print()
     print("MAP MATCHES")
     print("=" * 70)
 
-    for hit in map_hits[:3]:
+    if not use_historical_memory:
+
         print(
-            f"{hit.get('map')} / "
-            f"{hit.get('label_name')} "
-            f"score={hit['score']:.4f}"
+            "(historical retrieval skipped "
+            "for live/current question)"
         )
 
+    else:
+
+        for hit in map_hits[:3]:
+
+            print(
+                f"{hit.get('map')} / "
+                f"{hit.get('label_name')} "
+                f"score={hit['score']:.4f}"
+            )
     print()
     print("GLOBAL MATCHES")
+    print("=" * 70)
+
+    if use_historical_memory:
+
+        for hit in global_hits[:3]:
+
+            print(
+                f"{hit.get('behavior_key')} "
+                f"score={hit['score']:.4f}"
+            )
+
+    else:
+
+        print(
+            "(historical retrieval skipped)"
+        )
+
+
     print()
     print("TASK INTENT MATCHES")
     print("=" * 70)
 
-    for hit in intent_hits[:3]:
-        print(
-            f"{hit.get('label_name')} "
-            f"score={hit['score']:.4f}"
-        )
-    print("=" * 70)
+    if use_historical_memory:
 
-    for hit in global_hits[:3]:
-        print(
-            f"{hit.get('behavior_key')} "
-            f"score={hit['score']:.4f}"
-        )
+        for hit in intent_hits[:3]:
 
-    print()
+            print(
+                f"{hit.get('label_name')} "
+                f"score={hit['score']:.4f}"
+            )
+
+    else:
+
+        print("(historical retrieval skipped)")
+
+
     print()
     print(
-        "SELECTED OCCURRENCES:",
+        "SELECTED EVIDENCE PACKETS:",
         len(packets),
     )
 
     for packet in packets:
 
-        if "live_session" in packet:
+        if "structured_event_query" in packet:
+
+            query_data = packet[
+                "structured_event_query"
+            ]
+
+            plan = (
+                query_data.get(
+                    "plan"
+                )
+                or {}
+            )
+
+            result = (
+                query_data.get(
+                    "result"
+                )
+                or {}
+            )
+
+            print(
+                "- STRUCTURED EVENT QUERY",
+                {
+                    "operation":
+                        plan.get(
+                            "operation"
+                        ),
+
+                    "scope":
+                        plan.get(
+                            "scope"
+                        ),
+
+                    "filters":
+                        plan.get(
+                            "filters"
+                        ),
+
+                    "matched_count":
+                        result.get(
+                            "matched_count"
+                        ),
+
+                    "count":
+                        result.get(
+                            "count"
+                        ),
+                },
+            )
+
+        elif "saved_maps_metadata" in packet:
+
+            metadata = packet[
+                "saved_maps_metadata"
+            ]
+
+            print(
+                "- SAVED MAPS",
+                {
+                    "map_count":
+                        metadata.get(
+                            "map_count"
+                        ),
+
+                    "maps":
+                        [
+                            item.get(
+                                "name"
+                            )
+                            for item
+                            in metadata.get(
+                                "maps",
+                                []
+                            )
+                        ],
+                },
+            )
+
+        elif "live_session" in packet:
 
             live = packet[
                 "live_session"
@@ -1642,6 +2166,13 @@ def main():
             current_navigation = (
                 live.get(
                     "current_navigation"
+                )
+                or {}
+            )
+
+            ros_runtime = (
+                live.get(
+                    "ros_runtime"
                 )
                 or {}
             )
@@ -1660,6 +2191,17 @@ def main():
                     "label":
                         current_navigation.get(
                             "label_name"
+                        ),
+
+                    "amcl_present":
+                        (
+                            ros_runtime.get(
+                                "important_node_presence",
+                                {},
+                            )
+                            .get(
+                                "/amcl"
+                            )
                         ),
                 },
             )
@@ -1741,6 +2283,9 @@ def main():
                 "- UNKNOWN PACKET TYPE"
             )
 
+    # ========================================================
+    # OPTIONAL EVIDENCE DISPLAY
+    # ========================================================
     if args.show_evidence:
         print()
         print("EVIDENCE")
@@ -1752,23 +2297,26 @@ def main():
                 indent=2,
             )
         )
-
     if args.no_llm:
         return
 
+
+    # ========================================================
+    # NO EVIDENCE
+    # ========================================================
+
     if not packets:
         print()
-        if nonexecution_question:
-            print(
-                "No matching requested-task "
-                "occurrence could be retrieved."
-            )
-        else:
-            print(
-                "No executed occurrence "
-                "could be retrieved."
-            )
+        print(
+            "No relevant evidence could be retrieved."
+        )
+
         return
+
+
+    # ========================================================
+    # LLM
+    # ========================================================
 
     prompt = build_llm_prompt(
         question,

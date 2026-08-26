@@ -85,7 +85,7 @@ if [ ! -f "$MAPPING_SCAN_FILTER" ]; then
 fi
 
 MAPPING_SCAN_FILTER="$(realpath "$MAPPING_SCAN_FILTER")"
-export ROS_DOMAIN_ID=63
+export ROS_DOMAIN_ID=57
 
 source /opt/ros/humble/setup.bash
 source "$MAPPING_QBOT_SETUP"

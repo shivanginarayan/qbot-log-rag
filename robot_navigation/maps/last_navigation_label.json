@@ -1,10 +1,10 @@
 {
-  "name": "home",
+  "name": "door",
   "kind": "navigation",
-  "detail": "Mapping start/home position",
+  "detail": "",
   "world": {
-    "x": 0.0,
-    "y": 0.0
+    "x": 1.2400000000000002,
+    "y": 2.780000000000001
   },
   "status": 4
 }

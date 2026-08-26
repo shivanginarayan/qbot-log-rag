@@ -1,6 +1,7 @@
 #include "rclcpp/rclcpp.hpp"
 
 #include <geometry_msgs/msg/twist.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/empty.hpp>
 
 #include <chrono>
@@ -10,11 +11,12 @@
 #include <stdexcept>
 #include <string>
 
-
-#include "quanser/quanser_extern.h"
-#include "quanser/quanser_hid.h"
+// quanser_hid.h uses the EXTERN macro but does not include quanser_extern.h
+// itself, so it only compiles after a header that pulls EXTERN in. Keep
+// quanser_messages.h above it; alphabetising these three breaks the build.
 #include "quanser/quanser_messages.h"
 #include "quanser/quanser_memory.h"
+#include "quanser/quanser_hid.h"
 
 using namespace std::chrono_literals;
 
@@ -29,6 +31,10 @@ public:
             "mapping_label_topic", "/mapping/drop_label");
         mapping_label_button_bit_ = this->declare_parameter<int>(
             "mapping_label_button_bit", 1);
+        command_topic_ = this->declare_parameter<std::string>(
+            "cmd_vel_topic", "/cmd_vel");
+        lb_state_topic_ = this->declare_parameter<std::string>(
+            "lb_state_topic", "/controller/lb_held");
         const int controller_number = this->declare_parameter<int>(
             "controller_number", 1);
         const int reconnect_interval_ms = this->declare_parameter<int>(
@@ -41,6 +47,11 @@ public:
         if (mapping_label_topic_.empty())
         {
             throw std::invalid_argument("mapping_label_topic cannot be empty");
+        }
+        if (command_topic_.empty() || lb_state_topic_.empty())
+        {
+            throw std::invalid_argument(
+                "cmd_vel_topic and lb_state_topic cannot be empty");
         }
         if (controller_number < 1 || controller_number > 16)
         {
@@ -61,12 +72,15 @@ public:
         poll_failure_grace_ = std::chrono::milliseconds(poll_failure_grace_ms);
 
         command_publisher_ = this->create_publisher<geometry_msgs::msg::Twist>(
-            "cmd_vel", 10);
+            command_topic_, 10);
+        lb_state_publisher_ = this->create_publisher<std_msgs::msg::Bool>(
+            lb_state_topic_, rclcpp::QoS(1).reliable().transient_local());
         mapping_label_publisher_ = this->create_publisher<std_msgs::msg::Empty>(
             mapping_label_topic_, 10);
 
         last_open_attempt_ =
             std::chrono::steady_clock::now() - reconnect_interval_;
+        publish_lb_state(false);
         const bool connected = try_open_controller();
         // The stock driver polled the gamepad continuously. 20 ms keeps the
         // state fresh and the device buffer drained without burning a core.
@@ -89,6 +103,8 @@ public:
 
     ~CommandPublisher() override
     {
+        publish_stop();
+        publish_lb_state(false);
         close_controller();
     }
 
@@ -111,6 +127,13 @@ private:
     {
         geometry_msgs::msg::Twist stop;
         command_publisher_->publish(stop);
+    }
+
+    void publish_lb_state(bool held)
+    {
+        std_msgs::msg::Bool state;
+        state.data = held;
+        lb_state_publisher_->publish(state);
     }
 
     bool try_open_controller()
@@ -165,44 +188,60 @@ private:
         game_controller_close(gamepad_);
         gamepad_open_ = false;
         gamepad_ = {};
+        publish_lb_state(false);
     }
 
-    // The gamepad only produces a report when something actually moves, and the
-    // handle is non-blocking, so an idle controller answers nearly every poll
-    // with -QERR_WOULD_BLOCK. That means "nothing newer queued", not a fault:
-    // data_ still holds the live stick and button state and must keep driving.
-    // Drain whatever is queued, then fall back on the last known state.
+    // Quanser reports the whole controller state on every poll and raises
+    // is_new only when it changed, so drain what the device has queued and keep
+    // the newest state. A poll that fails after a good read in the same tick is
+    // ignored, exactly as the stock driver's continuous polling loop did.
     bool read_latest_state()
     {
         constexpr int max_reads = 32;
+        int successful_reads = 0;
+        bool nothing_queued = false;
         for (int read = 0; read < max_reads; ++read)
         {
             t_boolean is_new = false;
             t_game_controller_states latest = data_;
             result_ = game_controller_poll(gamepad_, &latest, &is_new);
-            if (result_ == -QERR_WOULD_BLOCK || result_ == -QERR_INTERRUPTED)
+            if (result_ == -QERR_WOULD_BLOCK)
             {
+                // The device has no new report queued. An F710 only sends one
+                // when something changes, so an idle pad - or a stick held at a
+                // steady position - returns this on every poll. data_ still
+                // holds the current state, so this means "nothing new", not a
+                // failure. The stock Quanser drivers skip -QERR_WOULD_BLOCK the
+                // same way. Treating it as a failure took the pad down after
+                // poll_failure_grace_ whenever the driver was not being moved.
+                nothing_queued = true;
                 break;
             }
             if (result_ < 0)
             {
-                note_poll_failure();
-                return false;
+                break;
             }
             data_ = latest;
+            ++successful_reads;
             if (!is_new)
             {
                 break;
             }
         }
 
-        poll_failing_ = false;
-        return true;
+        if (successful_reads > 0 || nothing_queued)
+        {
+            poll_failing_ = false;
+            return true;
+        }
+
+        note_poll_failure();
+        return false;
     }
 
-    // Only genuine device errors reach here. Give up on the controller once one
-    // has persisted for the whole grace window, so the gamepad is not taken down
-    // for reconnect_interval_ by a single transient Quanser error.
+    // A single failed poll used to be harmless. Only give up on the device once
+    // it has failed continuously for the whole grace window, so the gamepad is
+    // not taken down for reconnect_interval_ by one transient Quanser error.
     void note_poll_failure()
     {
         const auto now = std::chrono::steady_clock::now();
@@ -266,6 +305,7 @@ private:
         const std::uint32_t buttons =
             static_cast<std::uint32_t>(data_.buttons);
         const bool lb_pressed = button_pressed(buttons, 4);
+        publish_lb_state(lb_pressed);
         const bool label_pressed =
             button_pressed(buttons, mapping_label_button_bit_);
 
@@ -331,8 +371,11 @@ private:
 
     rclcpp::TimerBase::SharedPtr timer_;
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr command_publisher_;
+    rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr lb_state_publisher_;
     rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr mapping_label_publisher_;
     std::string mapping_label_topic_;
+    std::string command_topic_;
+    std::string lb_state_topic_;
     int mapping_label_button_bit_ = 1;
     t_uint8 controller_number_ = 1;
     std::chrono::milliseconds reconnect_interval_{2000};

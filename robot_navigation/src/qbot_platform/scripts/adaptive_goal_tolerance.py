@@ -28,8 +28,8 @@ else:
 
 @dataclass(frozen=True)
 class ToleranceConfig:
-    precise_xy_tolerance: float = 0.10
-    normal_xy_tolerance: float = 0.25
+    precise_xy_tolerance: float = 0.15
+    normal_xy_tolerance: float = 0.20
     precise_enter_std_dev: float = 0.08
     precise_exit_std_dev: float = 0.12
     required_confident_samples: int = 3
@@ -152,8 +152,8 @@ class AdaptiveGoalTolerance(Node):
         self.declare_parameter("pose_topic", "/amcl_pose")
         self.declare_parameter("controller_node", "/controller_server")
         self.declare_parameter("goal_checker_id", "general_goal_checker")
-        self.declare_parameter("precise_xy_tolerance", 0.10)
-        self.declare_parameter("normal_xy_tolerance", 0.25)
+        self.declare_parameter("precise_xy_tolerance", 0.15)
+        self.declare_parameter("normal_xy_tolerance", 0.20)
         self.declare_parameter("precise_enter_std_dev", 0.08)
         self.declare_parameter("precise_exit_std_dev", 0.12)
         self.declare_parameter("required_confident_samples", 3)

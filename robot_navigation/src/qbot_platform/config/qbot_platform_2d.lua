@@ -21,7 +21,7 @@ options = {
   num_point_clouds = 0,
   lookup_transform_timeout_sec = 0.2,
   submap_publish_period_sec = 0.3,
-  pose_publish_period_sec = 5e-3,
+  pose_publish_period_sec = 0.05,
   publish_tracked_pose = true,
   trajectory_publish_period_sec = 30e-3,
   rangefinder_sampling_ratio = 1.,
@@ -60,15 +60,14 @@ TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.rotation_delta_cost_wei
 
 POSE_GRAPH.optimize_every_n_nodes = 30
 POSE_GRAPH.constraint_builder.min_score = 0.65
-POSE_GRAPH.constraint_builder.log_matches = false
+POSE_GRAPH.constraint_builder.log_matches = true
 POSE_GRAPH.constraint_builder.fast_correlative_scan_matcher.linear_search_window = 15.0
 
 POSE_GRAPH.constraint_builder.fast_correlative_scan_matcher.angular_search_window = math.rad(30)
 -- POSE_GRAPH.optimization_problem.ceres_solver_options.max_num_iterations = 200s
 
-POSE_GRAPH.constraint_builder.min_score = 0.65
 POSE_GRAPH.constraint_builder.global_localization_min_score = 0.7
-POSE_GRAPH.constraint_builder.sampling_ratio = 0.01
+POSE_GRAPH.constraint_builder.sampling_ratio = 0.10
 POSE_GRAPH.optimization_problem.huber_scale = 1e2
 POSE_GRAPH.max_num_final_iterations = 500
 

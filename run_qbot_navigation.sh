@@ -9,12 +9,14 @@ RUN_QBOT_SETUP="$HOME/ros2/install/setup.bash"
 RUN_MAP=""
 RUN_LABELS=""
 RUN_SCAN_FILTER="$RUN_NAV_DIR/filters/scan_wedge_filter.json"
+RUN_LOCALIZER="amcl"
+RUN_PBSTREAM=""
 RUN_USE_ADAPTIVE_GOAL_TOLERANCE=true
 RUN_GOAL_TOLERANCE_DESCRIPTION="adaptive"
 RUN_BUILD_STAMP="$RUN_NAV_DIR/install/.qbot_platform_source_stamp"
 
 usage() {
-    echo "Usage: $0 --map MAP.yaml [--labels LABELS.json] [--scan-filter-file FILTER.json] [--fixed-goal-tolerance]"
+    echo "Usage: $0 --map MAP.yaml [--labels LABELS.json] [--localizer amcl|cartographer] [--pbstream MAP.pbstream] [--scan-filter-file FILTER.json] [--fixed-goal-tolerance]"
     echo
     echo "The map is required. If --labels is omitted, <map_stem>_labels.json is used."
     echo "Maps available in $RUN_MAP_DIR:"
@@ -45,6 +47,16 @@ while [ "$#" -gt 0 ]; do
             RUN_SCAN_FILTER="$2"
             shift 2
             ;;
+        --localizer)
+            [ "$#" -ge 2 ] || { echo "ERROR: --localizer requires amcl or cartographer"; usage; exit 2; }
+            RUN_LOCALIZER="$2"
+            shift 2
+            ;;
+        --pbstream)
+            [ "$#" -ge 2 ] || { echo "ERROR: --pbstream requires a path"; usage; exit 2; }
+            RUN_PBSTREAM="$2"
+            shift 2
+            ;;
         --fixed-goal-tolerance)
             RUN_USE_ADAPTIVE_GOAL_TOLERANCE=false
             shift
@@ -66,6 +78,21 @@ if [ -z "$RUN_MAP" ]; then
     usage
     exit 2
 fi
+
+case "$RUN_LOCALIZER" in
+    amcl) ;;
+    cartographer)
+        if [ -z "$RUN_PBSTREAM" ]; then
+            RUN_PBSTREAM="${RUN_MAP%.yaml}.pbstream"
+        fi
+        [ -f "$RUN_PBSTREAM" ] || {
+            echo "ERROR: Cartographer localization requires a matching pbstream: $RUN_PBSTREAM"
+            exit 2
+        }
+        RUN_USE_ADAPTIVE_GOAL_TOLERANCE=false
+        ;;
+    *) echo "ERROR: --localizer must be amcl or cartographer"; exit 2 ;;
+esac
 
 if [ "$RUN_USE_ADAPTIVE_GOAL_TOLERANCE" = false ]; then
     RUN_GOAL_TOLERANCE_DESCRIPTION="fixed at YAML value"
@@ -108,7 +135,10 @@ fi
 RUN_MAP="$(realpath "$RUN_MAP")"
 RUN_LABELS="$(realpath "$RUN_LABELS")"
 RUN_SCAN_FILTER="$(realpath "$RUN_SCAN_FILTER")"
-export ROS_DOMAIN_ID=63
+if [ -n "$RUN_PBSTREAM" ]; then
+    RUN_PBSTREAM="$(realpath "$RUN_PBSTREAM")"
+fi
+export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-63}"
 
 echo "=========================================="
 echo " QBot Navigation"
@@ -119,6 +149,8 @@ echo "ROS_DOMAIN_ID: $ROS_DOMAIN_ID"
 echo "Map:           $RUN_MAP"
 echo "Labels:        $RUN_LABELS"
 echo "Scan filter:   $RUN_SCAN_FILTER"
+echo "Localizer:     $RUN_LOCALIZER"
+if [ -n "$RUN_PBSTREAM" ]; then echo "Cartographer:   $RUN_PBSTREAM"; fi
 echo "Goal tolerance: $RUN_GOAL_TOLERANCE_DESCRIPTION"
 echo "=========================================="
 
@@ -158,22 +190,38 @@ cleanup() {
 trap cleanup INT TERM EXIT
 
 echo "Starting QBot navigation..."
+RUN_LAUNCH_ARGS=(
+    map:="$RUN_MAP"
+    labels_file:="$RUN_LABELS"
+    localizer:="$RUN_LOCALIZER"
+    scan_filter_file:="$RUN_SCAN_FILTER"
+    use_scan_filter:=true
+    use_adaptive_goal_tolerance:="$RUN_USE_ADAPTIVE_GOAL_TOLERANCE"
+    use_breadcrumb_return:=false
+)
+# ros2 launch rejects "name:=" with an empty value, and RUN_PBSTREAM is only set
+# in cartographer mode. The launch file already declares pbstream with an empty
+# default, so pass it only when there is a real path to pass.
+if [ -n "$RUN_PBSTREAM" ]; then
+    RUN_LAUNCH_ARGS+=(pbstream:="$RUN_PBSTREAM")
+fi
+
 ros2 launch qbot_platform \
     qbot_platform_map_nav_bringup_launch.py \
-    map:="$RUN_MAP" \
-    labels_file:="$RUN_LABELS" \
-    scan_filter_file:="$RUN_SCAN_FILTER" \
-    use_scan_filter:=true \
-    use_adaptive_goal_tolerance:="$RUN_USE_ADAPTIVE_GOAL_TOLERANCE" \
-    use_breadcrumb_return:=false &
+    "${RUN_LAUNCH_ARGS[@]}" &
 
 RUN_NAV_PID=$!
 echo "Navigation process started with PID: $RUN_NAV_PID"
-echo "Waiting for AMCL..."
+if [ "$RUN_LOCALIZER" = "amcl" ]; then
+    RUN_LOCALIZER_NODE="/amcl"
+else
+    RUN_LOCALIZER_NODE="/cartographer_node"
+fi
+echo "Waiting for $RUN_LOCALIZER_NODE..."
 
-until ros2 node list 2>/dev/null | grep -qx "/amcl"; do
+until ros2 node list 2>/dev/null | grep -qx "$RUN_LOCALIZER_NODE"; do
     if ! kill -0 "$RUN_NAV_PID" 2>/dev/null; then
-        echo "ERROR: navigation exited before AMCL started."
+        echo "ERROR: navigation exited before $RUN_LOCALIZER_NODE started."
         wait "$RUN_NAV_PID" || true
         RUN_NAV_PID=""
         exit 1
