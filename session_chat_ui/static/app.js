@@ -1,5 +1,20 @@
 "use strict";
 
+const loginScreen = document.getElementById("loginScreen");
+const demographicsScreen = document.getElementById("demographicsScreen");
+const chatScreen = document.getElementById("chatScreen");
+const loginForm = document.getElementById("loginForm");
+const loginUserIdInput = document.getElementById("loginUserId");
+const loginButton = document.getElementById("loginButton");
+const loginNotice = document.getElementById("loginNotice");
+const demographicsForm = document.getElementById("demographicsForm");
+const demographicProgress = document.getElementById("demographicProgress");
+const demographicProgressBar = document.getElementById("demographicProgressBar");
+const demographicQuestion = document.getElementById("demographicQuestion");
+const demographicAnswer = document.getElementById("demographicAnswer");
+const demographicSubmit = document.getElementById("demographicSubmit");
+const demographicNotice = document.getElementById("demographicNotice");
+const demographicUserId = document.getElementById("demographicUserId");
 const chatForm = document.getElementById("chatForm");
 const messages = document.getElementById("messages");
 const conversation = document.getElementById("conversation");
@@ -19,6 +34,8 @@ const sessionId = document.getElementById("sessionId");
 const sessionState = document.getElementById("sessionState");
 const mapName = document.getElementById("mapName");
 const storedCount = document.getElementById("storedCount");
+const loggedInUserId = document.getElementById("loggedInUserId");
+const switchUserButton = document.getElementById("switchUserButton");
 
 let requestInProgress = false;
 let statusLoaded = false;
@@ -26,15 +43,243 @@ let apiKeyConfigured = false;
 let apiKeyEntryAllowed = false;
 let displayedHistoryUserId = "";
 let historyRequestNumber = 0;
-let historyLoadTimer = null;
+let activeDemographicQuestion = null;
 
 const emptyConversationMarkup = conversation.innerHTML;
 
-try {
-  userIdInput.value = localStorage.getItem("qbot-session-user-id") || "";
-} catch (error) {
-  // The UI still works when browser storage is disabled.
+function setInlineNotice(element, message) {
+  element.textContent = message || "";
+  element.hidden = !message;
 }
+
+function showScreen(screen) {
+  loginScreen.hidden = screen !== loginScreen;
+  demographicsScreen.hidden = screen !== demographicsScreen;
+  chatScreen.hidden = screen !== chatScreen;
+}
+
+function setCurrentUser(userId) {
+  const cleanUserId = userId.trim();
+  userIdInput.value = cleanUserId;
+  loggedInUserId.textContent = cleanUserId || "—";
+  demographicUserId.textContent = cleanUserId;
+  demographicUserId.title = cleanUserId;
+}
+
+function renderDemographicQuestion(question) {
+  activeDemographicQuestion = question;
+  demographicQuestion.textContent = question.text;
+  demographicProgress.textContent = `Question ${question.number} of ${question.total}`;
+  demographicProgressBar.style.width = `${Math.round((question.number / question.total) * 100)}%`;
+  demographicAnswer.replaceChildren();
+  setInlineNotice(demographicNotice, "");
+
+  if (question.kind === "rating_1_5") {
+    const scaleLabels = document.createElement("div");
+    scaleLabels.className = "likert-scale-labels";
+
+    const disagree = document.createElement("span");
+    disagree.textContent = "1 · Strongly disagree";
+    const agree = document.createElement("span");
+    agree.textContent = "5 · Strongly agree";
+    scaleLabels.append(disagree, agree);
+
+    const options = document.createElement("div");
+    options.className = "likert-options";
+    options.setAttribute("role", "radiogroup");
+    options.setAttribute("aria-label", "Choose a number from 1 to 5");
+
+    for (let value = 1; value <= 5; value += 1) {
+      const label = document.createElement("label");
+      label.className = "likert-option";
+
+      const input = document.createElement("input");
+      input.type = "radio";
+      input.name = "demographicRating";
+      input.value = String(value);
+      input.required = true;
+      input.addEventListener("change", () => {
+        options.querySelectorAll(".likert-option").forEach((option) => {
+          const optionInput = option.querySelector("input");
+          option.classList.toggle("selected", optionInput.checked);
+        });
+      });
+
+      const number = document.createElement("span");
+      number.textContent = String(value);
+      label.append(input, number);
+      options.appendChild(label);
+    }
+
+    demographicAnswer.append(scaleLabels, options);
+    options.querySelector("input").focus();
+    return;
+  }
+
+  const input = question.kind === "birth_year"
+    ? document.createElement("input")
+    : document.createElement(question.index === 2 ? "textarea" : "input");
+  input.id = "demographicResponse";
+  input.className = "onboarding-input";
+  input.name = "demographicResponse";
+  input.required = true;
+  input.maxLength = 2000;
+
+  if (question.kind === "birth_year") {
+    input.type = "number";
+    input.min = "1900";
+    input.max = String(new Date().getUTCFullYear());
+    input.step = "1";
+    input.inputMode = "numeric";
+    input.placeholder = "Four-digit year";
+  } else {
+    input.placeholder = question.index === 1
+      ? "Enter your gender"
+      : "Enter your response";
+    if (input.tagName === "TEXTAREA") input.rows = 3;
+  }
+
+  demographicAnswer.appendChild(input);
+  input.focus();
+}
+
+function readDemographicAnswer() {
+  if (!activeDemographicQuestion) return "";
+  if (activeDemographicQuestion.kind === "rating_1_5") {
+    const selected = demographicAnswer.querySelector(
+      'input[name="demographicRating"]:checked',
+    );
+    return selected ? selected.value : "";
+  }
+  const input = demographicAnswer.querySelector(".onboarding-input");
+  return input ? input.value.trim() : "";
+}
+
+async function enterChat() {
+  showScreen(chatScreen);
+  setNotice("");
+  resetConversation();
+  displayedHistoryUserId = "";
+  await Promise.all([
+    loadChatHistory(userIdInput.value),
+    refreshStatus(),
+  ]);
+  if (apiKeyConfigured) {
+    questionInput.focus();
+  } else if (apiKeyEntryAllowed) {
+    apiKeyInput.focus();
+  }
+}
+
+loginForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const userId = loginUserIdInput.value.trim();
+  if (!userId) {
+    setInlineNotice(loginNotice, "Enter your User ID.");
+    loginUserIdInput.focus();
+    return;
+  }
+
+  loginButton.disabled = true;
+  setInlineNotice(loginNotice, "");
+
+  try {
+    const response = await fetch("/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+      body: JSON.stringify({ user_id: userId }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "The participant login could not be saved.");
+    }
+
+    setCurrentUser(data.user_id);
+    if (data.completed) {
+      await enterChat();
+    } else if (data.question) {
+      showScreen(demographicsScreen);
+      renderDemographicQuestion(data.question);
+      refreshStatus();
+    } else {
+      throw new Error("The next survey question could not be loaded.");
+    }
+  } catch (error) {
+    setInlineNotice(
+      loginNotice,
+      error.message || "The participant login could not be saved.",
+    );
+  } finally {
+    loginButton.disabled = false;
+  }
+});
+
+demographicsForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!activeDemographicQuestion) return;
+
+  const answer = readDemographicAnswer();
+  if (!answer) {
+    setInlineNotice(demographicNotice, "Enter or select a response before continuing.");
+    return;
+  }
+
+  demographicSubmit.disabled = true;
+  setInlineNotice(demographicNotice, "");
+
+  try {
+    const response = await fetch("/api/demographics", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+      body: JSON.stringify({
+        user_id: userIdInput.value,
+        question_index: activeDemographicQuestion.index,
+        answer,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      if (data.question) renderDemographicQuestion(data.question);
+      throw new Error(data.error || "The survey response could not be saved.");
+    }
+
+    if (data.completed) {
+      activeDemographicQuestion = null;
+      await enterChat();
+    } else if (data.question) {
+      renderDemographicQuestion(data.question);
+    } else {
+      throw new Error("The next survey question could not be loaded.");
+    }
+  } catch (error) {
+    setInlineNotice(
+      demographicNotice,
+      error.message || "The survey response could not be saved.",
+    );
+  } finally {
+    demographicSubmit.disabled = false;
+  }
+});
+
+switchUserButton.addEventListener("click", () => {
+  if (requestInProgress) {
+    setNotice("Wait for the current QBot response before switching users.");
+    return;
+  }
+
+  historyRequestNumber += 1;
+  activeDemographicQuestion = null;
+  displayedHistoryUserId = "";
+  setCurrentUser("");
+  resetConversation();
+  loginUserIdInput.value = "";
+  setInlineNotice(loginNotice, "");
+  showScreen(loginScreen);
+  refreshStatus();
+  loginUserIdInput.focus();
+});
 
 function setNotice(message) {
   notice.textContent = message || "";
@@ -186,11 +431,6 @@ async function loadChatHistory(userId) {
     }
 
     displayedHistoryUserId = cleanUserId;
-    try {
-      localStorage.setItem("qbot-session-user-id", cleanUserId);
-    } catch (error) {
-      // Browser storage is optional.
-    }
     scrollToLatest();
     return true;
   } catch (error) {
@@ -345,33 +585,6 @@ messages.addEventListener("click", (event) => {
   }
 });
 
-userIdInput.addEventListener("input", () => {
-  clearTimeout(historyLoadTimer);
-  const userId = userIdInput.value.trim();
-
-  if (userId !== displayedHistoryUserId) {
-    displayedHistoryUserId = "";
-    resetConversation();
-  }
-
-  if (!userId) {
-    historyRequestNumber += 1;
-    refreshStatus();
-    return;
-  }
-
-  historyLoadTimer = setTimeout(() => {
-    loadChatHistory(userId);
-    refreshStatus();
-  }, 500);
-});
-
-userIdInput.addEventListener("change", () => {
-  clearTimeout(historyLoadTimer);
-  loadChatHistory(userIdInput.value);
-  refreshStatus();
-});
-
 chatForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (requestInProgress) return;
@@ -380,8 +593,9 @@ chatForm.addEventListener("submit", async (event) => {
   const question = questionInput.value.trim();
 
   if (!userId) {
-    setNotice("Enter your user ID before sending a question.");
-    userIdInput.focus();
+    showScreen(loginScreen);
+    setInlineNotice(loginNotice, "Log in before sending a question.");
+    loginUserIdInput.focus();
     return;
   }
 
@@ -402,16 +616,10 @@ chatForm.addEventListener("submit", async (event) => {
   }
 
   if (displayedHistoryUserId !== userId) {
-    clearTimeout(historyLoadTimer);
     await loadChatHistory(userId);
   }
 
   setNotice("");
-  try {
-    localStorage.setItem("qbot-session-user-id", userId);
-  } catch (error) {
-    // Browser storage is optional.
-  }
 
   const suggestions = document.getElementById("suggestions");
   if (suggestions) suggestions.remove();
@@ -423,7 +631,7 @@ chatForm.addEventListener("submit", async (event) => {
   const thinking = addThinkingMessage();
   requestInProgress = true;
   sendButton.disabled = true;
-  userIdInput.disabled = true;
+  switchUserButton.disabled = true;
   audienceInput.disabled = true;
 
   try {
@@ -465,15 +673,14 @@ chatForm.addEventListener("submit", async (event) => {
   } finally {
     requestInProgress = false;
     sendButton.disabled = false;
-    userIdInput.disabled = false;
+    switchUserButton.disabled = false;
     audienceInput.disabled = false;
     questionInput.focus();
     refreshStatus();
   }
 });
 
+showScreen(loginScreen);
+loginUserIdInput.focus();
 refreshStatus();
-if (userIdInput.value.trim()) {
-  loadChatHistory(userIdInput.value);
-}
 setInterval(refreshStatus, 10000);

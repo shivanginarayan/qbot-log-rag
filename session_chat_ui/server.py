@@ -47,6 +47,120 @@ MAX_QUESTION_LENGTH = 8000
 MAX_ERROR_LENGTH = 4000
 MAX_API_KEY_LENGTH = 1024
 MAX_HISTORY_ITEMS = 100
+MAX_DEMOGRAPHIC_RESPONSE_LENGTH = 2000
+
+DEMOGRAPHIC_QUESTIONS = (
+    {
+        "text": "What year were you born?",
+        "kind": "birth_year",
+    },
+    {
+        "text": "What is your gender?",
+        "kind": "text",
+    },
+    {
+        "text": (
+            "Do you have any engineering background, experience or knowledge?"
+        ),
+        "kind": "text",
+    },
+    {
+        "text": (
+            "I can trust persons and organizations related to development "
+            "of robots"
+        ),
+        "kind": "rating_1_5",
+    },
+    {
+        "text": (
+            "Persons and organizations related to development of robots will "
+            "consider the needs, thoughts and feelings of their users"
+        ),
+        "kind": "rating_1_5",
+    },
+    {"text": "I can trust a robot", "kind": "rating_1_5"},
+    {
+        "text": "I would feel relaxed talking with a robot",
+        "kind": "rating_1_5",
+    },
+    {
+        "text": (
+            "If robots had emotions, I would be able to befriend them"
+        ),
+        "kind": "rating_1_5",
+    },
+    {
+        "text": (
+            "I would feel uneasy if I was given a job where I had to use robots"
+        ),
+        "kind": "rating_1_5",
+    },
+    {
+        "text": "I fear that a robot would not understand my commands",
+        "kind": "rating_1_5",
+    },
+    {"text": "Robots scare me", "kind": "rating_1_5"},
+    {
+        "text": "I would feel very nervous just being around a robot",
+        "kind": "rating_1_5",
+    },
+    {
+        "text": "I don't want a robot to touch me",
+        "kind": "rating_1_5",
+    },
+    {
+        "text": (
+            "Robots are necessary because they can do jobs that are too hard "
+            "or too dangerous for people"
+        ),
+        "kind": "rating_1_5",
+    },
+    {"text": "Robots can make life easier", "kind": "rating_1_5"},
+    {
+        "text": (
+            "Assigning routine tasks to robots lets people do more meaningful "
+            "tasks"
+        ),
+        "kind": "rating_1_5",
+    },
+    {
+        "text": "Dangerous tasks should primarily be given to robots",
+        "kind": "rating_1_5",
+    },
+    {
+        "text": (
+            "Robots are a good thing for society, because they help people"
+        ),
+        "kind": "rating_1_5",
+    },
+    {"text": "Robots may make us even lazier", "kind": "rating_1_5"},
+    {
+        "text": (
+            "Widespread use of robots is going to take away jobs from people"
+        ),
+        "kind": "rating_1_5",
+    },
+    {
+        "text": (
+            "I am afraid that robots will encourage less interaction between "
+            "humans"
+        ),
+        "kind": "rating_1_5",
+    },
+    {
+        "text": (
+            "Robotics is one of the areas of technology that needs to be "
+            "closely monitored"
+        ),
+        "kind": "rating_1_5",
+    },
+    {
+        "text": (
+            "Unregulated use of robotics can lead to societal upheavals"
+        ),
+        "kind": "rating_1_5",
+    },
+)
 
 
 class RagFailure(RuntimeError):
@@ -72,6 +186,58 @@ def utc_now():
 
 def has_control_characters(value):
     return any(ord(character) < 32 for character in value)
+
+
+def demographic_question_payload(question_index):
+    if not 0 <= question_index < len(DEMOGRAPHIC_QUESTIONS):
+        return None
+
+    question = DEMOGRAPHIC_QUESTIONS[question_index]
+    return {
+        "index": question_index,
+        "number": question_index + 1,
+        "total": len(DEMOGRAPHIC_QUESTIONS),
+        "text": question["text"],
+        "kind": question["kind"],
+    }
+
+
+def validate_demographic_answer(question_index, answer):
+    """Return a normalized stored answer or raise ValueError."""
+
+    if not isinstance(question_index, int) or isinstance(question_index, bool):
+        raise ValueError("The demographic question number is invalid.")
+    if not 0 <= question_index < len(DEMOGRAPHIC_QUESTIONS):
+        raise ValueError("The demographic question number is invalid.")
+
+    kind = DEMOGRAPHIC_QUESTIONS[question_index]["kind"]
+
+    if kind == "rating_1_5":
+        if isinstance(answer, bool):
+            raise ValueError("Select a number from 1 to 5.")
+        value = str(answer).strip()
+        if value not in {"1", "2", "3", "4", "5"}:
+            raise ValueError("Select a number from 1 to 5.")
+        return value
+
+    if not isinstance(answer, str):
+        answer = ""
+    value = answer.strip()
+    if not value:
+        raise ValueError("Enter a response before continuing.")
+    if len(value) > MAX_DEMOGRAPHIC_RESPONSE_LENGTH:
+        raise ValueError("The demographic response is too long.")
+
+    if kind == "birth_year":
+        current_year = datetime.now(timezone.utc).year
+        if not re.fullmatch(r"\d{4}", value):
+            raise ValueError("Enter a four-digit birth year.")
+        if not 1900 <= int(value) <= current_year:
+            raise ValueError(
+                "Enter a birth year between 1900 and {}.".format(current_year)
+            )
+
+    return value
 
 
 class SessionLocator:
@@ -239,6 +405,39 @@ class ChatStore:
     USER_MAP_INDEX = """
         CREATE INDEX IF NOT EXISTS idx_ui_user_maps_user_time
         ON ui_user_maps(user_id, claimed_at_ns)
+    """
+
+    PARTICIPANT_SCHEMA = """
+        CREATE TABLE IF NOT EXISTS ui_participants (
+            session_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            logged_in_at_ns INTEGER NOT NULL,
+            logged_in_at_iso TEXT NOT NULL,
+            demographics_completed_at_ns INTEGER,
+            demographics_completed_at_iso TEXT,
+            PRIMARY KEY (session_id, user_id),
+            FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+        )
+    """
+
+    DEMOGRAPHIC_SCHEMA = """
+        CREATE TABLE IF NOT EXISTS ui_demographic_responses (
+            session_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            question_index INTEGER NOT NULL,
+            question_text TEXT NOT NULL,
+            response_value TEXT NOT NULL,
+            response_kind TEXT NOT NULL,
+            answered_at_ns INTEGER NOT NULL,
+            answered_at_iso TEXT NOT NULL,
+            PRIMARY KEY (session_id, user_id, question_index),
+            FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+        )
+    """
+
+    DEMOGRAPHIC_INDEX = """
+        CREATE INDEX IF NOT EXISTS idx_ui_demographics_user_time
+        ON ui_demographic_responses(user_id, answered_at_ns)
     """
 
     def __init__(self, attempts=5):
@@ -422,6 +621,127 @@ class ChatStore:
         interactions = interactions[: int(limit)]
         interactions.reverse()
         return interactions
+
+    def register_participant(self, session, user_id):
+        logged_in_at_ns, logged_in_at_iso = utc_now()
+
+        def operation(connection):
+            connection.execute(self.PARTICIPANT_SCHEMA)
+            connection.execute(self.DEMOGRAPHIC_SCHEMA)
+            connection.execute(self.DEMOGRAPHIC_INDEX)
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO ui_participants (
+                    session_id,
+                    user_id,
+                    logged_in_at_ns,
+                    logged_in_at_iso
+                )
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    session["session_id"],
+                    user_id,
+                    logged_in_at_ns,
+                    logged_in_at_iso,
+                ),
+            )
+
+        self._write(session["database"], operation)
+
+    @staticmethod
+    def demographic_progress(session, user_id):
+        connection = None
+        answered_indexes = set()
+        try:
+            database_uri = "file:{}?mode=ro".format(session["database"])
+            connection = sqlite3.connect(database_uri, timeout=2, uri=True)
+            rows = connection.execute(
+                """
+                SELECT question_index
+                FROM ui_demographic_responses
+                WHERE session_id = ? AND user_id = ?
+                """,
+                (session["session_id"], user_id),
+            ).fetchall()
+            answered_indexes = {int(row[0]) for row in rows}
+        except (OSError, sqlite3.Error):
+            answered_indexes = set()
+        finally:
+            if connection is not None:
+                connection.close()
+
+        next_index = next(
+            (
+                index
+                for index in range(len(DEMOGRAPHIC_QUESTIONS))
+                if index not in answered_indexes
+            ),
+            None,
+        )
+        return {
+            "answered_count": len(answered_indexes),
+            "completed": next_index is None,
+            "next_question_index": next_index,
+        }
+
+    def save_demographic_answer(
+        self,
+        session,
+        user_id,
+        question_index,
+        response_value,
+    ):
+        answered_at_ns, answered_at_iso = utc_now()
+        question = DEMOGRAPHIC_QUESTIONS[question_index]
+        completed = question_index == len(DEMOGRAPHIC_QUESTIONS) - 1
+
+        def operation(connection):
+            connection.execute(self.PARTICIPANT_SCHEMA)
+            connection.execute(self.DEMOGRAPHIC_SCHEMA)
+            connection.execute(self.DEMOGRAPHIC_INDEX)
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO ui_demographic_responses (
+                    session_id,
+                    user_id,
+                    question_index,
+                    question_text,
+                    response_value,
+                    response_kind,
+                    answered_at_ns,
+                    answered_at_iso
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session["session_id"],
+                    user_id,
+                    question_index,
+                    question["text"],
+                    response_value,
+                    question["kind"],
+                    answered_at_ns,
+                    answered_at_iso,
+                ),
+            )
+            if completed:
+                connection.execute(
+                    """
+                    UPDATE ui_participants
+                    SET demographics_completed_at_ns = ?,
+                        demographics_completed_at_iso = ?
+                    WHERE session_id = ? AND user_id = ?
+                    """,
+                    (
+                        answered_at_ns,
+                        answered_at_iso,
+                        session["session_id"],
+                        user_id,
+                    ),
+                )
+
+        self._write(session["database"], operation)
 
     def claim_map(self, session, user_id, map_name):
         """Assign a newly detected map once; never transfer its ownership."""
@@ -958,6 +1278,14 @@ class ChatRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlsplit(self.path).path
+        if path == "/api/login":
+            self._handle_login()
+            return
+
+        if path == "/api/demographics":
+            self._handle_demographics()
+            return
+
         if path == "/api/status":
             self._handle_status()
             return
@@ -1032,6 +1360,21 @@ class ChatRequestHandler(BaseHTTPRequestHandler):
                     "error": (
                         "No QBot experiment database was found. Start "
                         "run_full_log_experiment.sh first."
+                    )
+                },
+            )
+            return
+
+        demographic_progress = (
+            self.server.application.store.demographic_progress(session, user_id)
+        )
+        if not demographic_progress["completed"]:
+            self._send_json(
+                403,
+                {
+                    "error": (
+                        "Complete the demographic questionnaire before "
+                        "using the QBot assistant."
                     )
                 },
             )
@@ -1204,6 +1547,167 @@ class ChatRequestHandler(BaseHTTPRequestHandler):
         status = self.server.application.status(user_id=user_id)
         status["api_key_entry_allowed"] = self._is_loopback_client()
         self._send_json(200, status)
+
+    def _handle_login(self):
+        payload = self._read_json_payload()
+        if payload is None:
+            return
+
+        user_id = payload.get("user_id", "")
+        if not isinstance(user_id, str):
+            user_id = ""
+        user_id = user_id.strip()
+
+        if not user_id:
+            self._send_json(400, {"error": "User ID is required."})
+            return
+        if len(user_id) > MAX_USER_ID_LENGTH:
+            self._send_json(400, {"error": "User ID is too long."})
+            return
+        if has_control_characters(user_id):
+            self._send_json(
+                400, {"error": "User ID contains invalid characters."}
+            )
+            return
+
+        session = self.server.application.locator.locate()
+        if session is None:
+            self._send_json(
+                503,
+                {
+                    "error": (
+                        "No QBot experiment database was found. Start "
+                        "run_full_log_experiment.sh first."
+                    )
+                },
+            )
+            return
+
+        try:
+            self.server.application.store.register_participant(session, user_id)
+            progress = self.server.application.store.demographic_progress(
+                session, user_id
+            )
+        except Exception as exc:
+            print("Participant login storage failed: {}".format(exc))
+            self._send_json(
+                503,
+                {"error": "The participant login could not be saved."},
+            )
+            return
+
+        next_index = progress["next_question_index"]
+        self._send_json(
+            200,
+            {
+                "user_id": user_id,
+                "session_id": session["session_id"],
+                "completed": progress["completed"],
+                "answered_count": progress["answered_count"],
+                "question": (
+                    demographic_question_payload(next_index)
+                    if next_index is not None
+                    else None
+                ),
+            },
+        )
+
+    def _handle_demographics(self):
+        payload = self._read_json_payload()
+        if payload is None:
+            return
+
+        user_id = payload.get("user_id", "")
+        question_index = payload.get("question_index")
+        answer = payload.get("answer")
+
+        if not isinstance(user_id, str):
+            user_id = ""
+        user_id = user_id.strip()
+
+        if not user_id or len(user_id) > MAX_USER_ID_LENGTH:
+            self._send_json(400, {"error": "A valid User ID is required."})
+            return
+        if has_control_characters(user_id):
+            self._send_json(
+                400, {"error": "User ID contains invalid characters."}
+            )
+            return
+
+        try:
+            normalized_answer = validate_demographic_answer(
+                question_index, answer
+            )
+        except ValueError as exc:
+            self._send_json(400, {"error": str(exc)})
+            return
+
+        session = self.server.application.locator.locate()
+        if session is None:
+            self._send_json(
+                503,
+                {"error": "No active QBot experiment database was found."},
+            )
+            return
+
+        try:
+            self.server.application.store.register_participant(session, user_id)
+            progress = self.server.application.store.demographic_progress(
+                session, user_id
+            )
+            expected_index = progress["next_question_index"]
+            if progress["completed"]:
+                self._send_json(
+                    200,
+                    {
+                        "user_id": user_id,
+                        "completed": True,
+                        "answered_count": len(DEMOGRAPHIC_QUESTIONS),
+                        "question": None,
+                    },
+                )
+                return
+            if question_index != expected_index:
+                self._send_json(
+                    409,
+                    {
+                        "error": "Submit the currently displayed question first.",
+                        "question": demographic_question_payload(expected_index),
+                    },
+                )
+                return
+
+            self.server.application.store.save_demographic_answer(
+                session,
+                user_id,
+                question_index,
+                normalized_answer,
+            )
+            progress = self.server.application.store.demographic_progress(
+                session, user_id
+            )
+        except Exception as exc:
+            print("Demographic response storage failed: {}".format(exc))
+            self._send_json(
+                503,
+                {"error": "The demographic response could not be saved."},
+            )
+            return
+
+        next_index = progress["next_question_index"]
+        self._send_json(
+            200,
+            {
+                "user_id": user_id,
+                "completed": progress["completed"],
+                "answered_count": progress["answered_count"],
+                "question": (
+                    demographic_question_payload(next_index)
+                    if next_index is not None
+                    else None
+                ),
+            },
+        )
 
     def _handle_history(self):
         payload = self._read_json_payload()

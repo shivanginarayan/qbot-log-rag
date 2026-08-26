@@ -153,7 +153,107 @@ class MapStatusLocatorTest(unittest.TestCase):
             self.assertFalse(older["claimable"])
 
 
+class DemographicQuestionTest(unittest.TestCase):
+    def test_has_three_direct_questions_then_twenty_numeric_ratings(self):
+        self.assertEqual(len(server.DEMOGRAPHIC_QUESTIONS), 23)
+        self.assertEqual(
+            [item["kind"] for item in server.DEMOGRAPHIC_QUESTIONS[:3]],
+            ["birth_year", "text", "text"],
+        )
+        self.assertTrue(
+            all(
+                item["kind"] == "rating_1_5"
+                for item in server.DEMOGRAPHIC_QUESTIONS[3:]
+            )
+        )
+
+    def test_rating_questions_accept_only_numbers_one_through_five(self):
+        for value in (1, 2, 3, 4, 5, "1", "5"):
+            normalized = server.validate_demographic_answer(3, value)
+            self.assertIn(normalized, {"1", "2", "3", "4", "5"})
+
+        for value in (0, 6, "0", "6", "yes", "strongly agree", True, ""):
+            with self.assertRaises(ValueError):
+                server.validate_demographic_answer(3, value)
+
+    def test_birth_year_requires_a_reasonable_four_digit_year(self):
+        self.assertEqual(
+            server.validate_demographic_answer(0, "1999"),
+            "1999",
+        )
+        for value in ("99", "1899", "next year", ""):
+            with self.assertRaises(ValueError):
+                server.validate_demographic_answer(0, value)
+
+
 class ChatStoreTest(unittest.TestCase):
+    def test_stores_and_resumes_demographics_for_each_user(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = create_session_database(
+                directory, "demographic_session", "running", 100
+            )
+            session = {
+                "session_id": "demographic_session",
+                "database": database,
+            }
+            store = server.ChatStore()
+
+            store.register_participant(session, "student-22")
+            self.assertEqual(
+                store.demographic_progress(session, "student-22"),
+                {
+                    "answered_count": 0,
+                    "completed": False,
+                    "next_question_index": 0,
+                },
+            )
+
+            answers = ["1998", "Non-binary", "Yes"] + ["3"] * 20
+            for question_index, answer in enumerate(answers):
+                store.save_demographic_answer(
+                    session,
+                    "student-22",
+                    question_index,
+                    answer,
+                )
+
+            progress = store.demographic_progress(session, "student-22")
+            self.assertTrue(progress["completed"])
+            self.assertEqual(progress["answered_count"], 23)
+            self.assertIsNone(progress["next_question_index"])
+
+            connection = sqlite3.connect(str(database))
+            stored = connection.execute(
+                """
+                SELECT question_text, response_value, response_kind
+                FROM ui_demographic_responses
+                WHERE session_id = ? AND user_id = ?
+                ORDER BY question_index
+                """,
+                ("demographic_session", "student-22"),
+            ).fetchall()
+            completed_at = connection.execute(
+                """
+                SELECT demographics_completed_at_iso
+                FROM ui_participants
+                WHERE session_id = ? AND user_id = ?
+                """,
+                ("demographic_session", "student-22"),
+            ).fetchone()
+            connection.close()
+
+            self.assertEqual(len(stored), 23)
+            self.assertEqual(stored[0][0], "What year were you born?")
+            self.assertEqual(stored[0][1], "1998")
+            self.assertEqual(stored[3][1:], ("3", "rating_1_5"))
+            self.assertTrue(completed_at[0])
+            self.assertEqual(
+                store.demographic_progress(session, "different-user")[
+                    "answered_count"
+                ],
+                0,
+            )
+
     def test_stores_user_question_and_robot_response_in_robot_db(self):
         with tempfile.TemporaryDirectory() as directory:
             database = create_session_database(
@@ -355,6 +455,87 @@ class ChatStoreTest(unittest.TestCase):
                 store.latest_map_for_user(sessions, "user-b", "map-b"),
                 "map-b",
             )
+
+
+class DemographicRequestFlowTest(unittest.TestCase):
+    @staticmethod
+    def call_handler(application, method_name, payload, path=None):
+        handler = object.__new__(server.ChatRequestHandler)
+        request_server = type("RequestServer", (), {})()
+        request_server.application = application
+        handler.server = request_server
+        handler._read_json_payload = mock.Mock(return_value=payload)
+        handler._send_json = mock.Mock()
+        if path is not None:
+            handler.path = path
+        getattr(handler, method_name)()
+        return handler._send_json.call_args.args
+
+    def test_login_resume_numeric_validation_and_chat_gate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            create_session_database(
+                directory, "web_session", "running", 100
+            )
+            application = server.ChatApplication(
+                locator=server.SessionLocator(runtime_dir=directory),
+                store=server.ChatStore(),
+                runner=object(),
+                initial_api_key="nvapi-test-only",
+            )
+
+            status, login = self.call_handler(
+                application,
+                "_handle_login",
+                {"user_id": "web-user"},
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(login["question"]["index"], 0)
+
+            for index, answer in enumerate(("1997", "Woman", "Yes")):
+                status, result = self.call_handler(
+                    application,
+                    "_handle_demographics",
+                    {
+                        "user_id": "web-user",
+                        "question_index": index,
+                        "answer": answer,
+                    },
+                )
+                self.assertEqual(status, 200)
+
+            status, rejected = self.call_handler(
+                application,
+                "_handle_demographics",
+                {
+                    "user_id": "web-user",
+                    "question_index": 3,
+                    "answer": "strongly agree",
+                },
+            )
+            self.assertEqual(status, 400)
+            self.assertIn("1 to 5", rejected["error"])
+
+            status, blocked_chat = self.call_handler(
+                application,
+                "do_POST",
+                {
+                    "user_id": "web-user",
+                    "question": "What happened?",
+                    "audience": "user",
+                },
+                path="/api/chat",
+            )
+            self.assertEqual(status, 403)
+            self.assertIn("demographic", blocked_chat["error"])
+
+            status, resumed = self.call_handler(
+                application,
+                "_handle_login",
+                {"user_id": "web-user"},
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(resumed["answered_count"], 3)
+            self.assertEqual(resumed["question"]["index"], 3)
 
 
 class UserFilteredStatusTest(unittest.TestCase):

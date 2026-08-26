@@ -18,10 +18,19 @@ inserted into that session's `runtime_logs/session_SESSION_ID/robot.db` before
 the LLM is called. The same row is then updated with the robot response shown
 on the page.
 
-When a returning User ID is restored or entered, the UI reads that user's most
-recent saved conversations from the existing session databases and displays
-them in chronological order. This history lookup is read-only and does not
-copy or move the saved records.
+The browser begins with a User ID login page. It then presents the 23
+demographic questions one at a time. The first three collect birth year,
+gender, and engineering background. Questions 4 through 23 accept only a
+numeric response from 1 (strongly disagree) through 5 (strongly agree). Each
+answer is stored immediately in the current experiment database under that
+User ID, so logging in again resumes the first unanswered question.
+
+After the survey is complete, the existing chat interface opens without
+asking for the User ID again. A returning participant who has already
+completed the survey for the current experiment goes directly to chat. The UI
+reads that user's recent saved conversations from the existing session
+databases and displays them in chronological order. This history lookup is
+read-only and does not copy or move the saved records.
 
 ## Start everything with one command
 
@@ -41,11 +50,12 @@ On the QBot computer, open:
 http://localhost:8766
 ```
 
-Enter the NVIDIA API key in the password field. The key is held only in the UI
-server's memory and is passed temporarily to `ask_robot.py` while a question is
-answered. The application does not write it to `robot.db`, a file, browser
-storage, or its logs. It disappears when the launcher stops, and the UI also
-provides a **Remove** button that clears it from server memory immediately.
+Log in and complete the participant survey, then enter the NVIDIA API key in
+the chat page's password field. The key is held only in the UI server's memory
+and is passed temporarily to `ask_robot.py` while a question is answered. The
+application does not write it to `robot.db`, a file, browser storage, or its
+logs. It disappears when the launcher stops, and the UI also provides a
+**Remove** button that clears it from server memory immediately.
 
 Because the UI uses plain local HTTP, API-key entry is intentionally accepted
 only from `localhost` on the QBot. After the key has been entered there, other
@@ -79,11 +89,13 @@ is already part of the project environment.
 
 ## Database record
 
-The UI creates two additive tables inside the selected session database:
+The UI creates four additive tables inside the selected session database:
 
 ```text
 ui_chat_interactions
 ui_user_maps
+ui_participants
+ui_demographic_responses
 ```
 
 Important columns are:
@@ -100,11 +112,23 @@ Important columns are:
 `ui_user_maps` stores only the session ID, map name, owning User ID, and the
 time that ownership was first detected.
 
+`ui_participants` records the User ID login and survey completion time for the
+experiment. `ui_demographic_responses` stores the User ID, exact question,
+answer, answer type, and answer time. The numeric agreement answers are stored
+as the strings `1` through `5`.
+
 To inspect the stored exchanges after a session:
 
 ```bash
 sqlite3 runtime_logs/session_SESSION_ID/robot.db \
   "SELECT user_id, question, robot_response FROM ui_chat_interactions;"
+```
+
+To inspect the demographic responses:
+
+```bash
+sqlite3 runtime_logs/session_SESSION_ID/robot.db \
+  "SELECT user_id, question_text, response_value FROM ui_demographic_responses ORDER BY user_id, question_index;"
 ```
 
 The UI does not provide a public database download route.

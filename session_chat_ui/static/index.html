@@ -11,7 +11,76 @@
   <div class="page-glow page-glow-one"></div>
   <div class="page-glow page-glow-two"></div>
 
-  <main class="app-shell">
+  <main id="loginScreen" class="onboarding-shell">
+    <section class="onboarding-card" aria-labelledby="loginTitle">
+      <div class="onboarding-brand">
+        <div class="robot-mark" aria-hidden="true">
+          <span class="robot-eye"></span>
+          <span class="robot-eye"></span>
+        </div>
+        <div>
+          <p class="eyebrow">Robot log intelligence</p>
+          <p class="onboarding-brand-name">QBot Evidence Console</p>
+        </div>
+      </div>
+
+      <div class="onboarding-copy">
+        <p class="step-label">Participant sign in</p>
+        <h1 id="loginTitle">Welcome to the QBot study</h1>
+        <p>Enter your assigned User ID to begin. Your survey and chat responses will be connected to this ID.</p>
+      </div>
+
+      <form id="loginForm" class="onboarding-form" autocomplete="off">
+        <label for="loginUserId">User ID</label>
+        <input
+          id="loginUserId"
+          class="onboarding-input"
+          type="text"
+          maxlength="128"
+          autocomplete="off"
+          autocapitalize="none"
+          spellcheck="false"
+          placeholder="Enter your User ID"
+          required
+        >
+        <button id="loginButton" class="primary-action" type="submit">Log in</button>
+      </form>
+      <div id="loginNotice" class="onboarding-notice" role="alert" hidden></div>
+    </section>
+  </main>
+
+  <main id="demographicsScreen" class="onboarding-shell" hidden>
+    <section class="onboarding-card demographics-card" aria-labelledby="demographicQuestion">
+      <div class="onboarding-brand compact-brand">
+        <div class="robot-mark" aria-hidden="true">
+          <span class="robot-eye"></span>
+          <span class="robot-eye"></span>
+        </div>
+        <div>
+          <p class="eyebrow">Participant survey</p>
+          <p class="onboarding-brand-name">QBot Evidence Console</p>
+        </div>
+        <span id="demographicUserId" class="participant-badge"></span>
+      </div>
+
+      <div class="survey-progress" aria-hidden="true">
+        <div id="demographicProgressBar" class="survey-progress-bar"></div>
+      </div>
+      <p id="demographicProgress" class="survey-progress-text">Question 1 of 23</p>
+
+      <form id="demographicsForm" class="demographics-form">
+        <fieldset>
+          <legend id="demographicQuestion">Loading question…</legend>
+          <div id="demographicAnswer" class="demographic-answer"></div>
+        </fieldset>
+        <button id="demographicSubmit" class="primary-action" type="submit">Submit and continue</button>
+      </form>
+      <div id="demographicNotice" class="onboarding-notice" role="alert" hidden></div>
+      <p class="survey-help">For agreement questions, choose a number from 1 (strongly disagree) to 5 (strongly agree).</p>
+    </section>
+  </main>
+
+  <main id="chatScreen" class="app-shell" hidden>
     <header class="topbar">
       <div class="identity">
         <div class="robot-mark" aria-hidden="true">
@@ -56,15 +125,12 @@
 
         <div class="sidebar-section">
           <p class="section-label">Your details</p>
-          <label class="field-label" for="userId">User ID</label>
-          <input
-            id="userId"
-            class="text-input"
-            type="text"
-            maxlength="128"
-            autocomplete="username"
-            placeholder="e.g. team-member-04"
-          >
+          <input id="userId" type="hidden">
+          <div class="current-user-card">
+            <span>Signed in as</span>
+            <strong id="loggedInUserId">—</strong>
+            <button id="switchUserButton" class="switch-user-button" type="button">Switch user</button>
+          </div>
 
           <label class="field-label field-spacing" for="audience">Answer style</label>
           <select id="audience" class="text-input">
@@ -100,7 +166,7 @@
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M12 3 4.5 6v5.4c0 4.7 3.2 8.1 7.5 9.6 4.3-1.5 7.5-4.9 7.5-9.6V6L12 3Zm0 2.2 5.5 2.2v4c0 3.5-2.2 6.2-5.5 7.5-3.3-1.3-5.5-4-5.5-7.5v-4L12 5.2Zm-1 3.3v4.2l3.7 2.1 1-1.7-2.7-1.5V8.5h-2Z"/>
           </svg>
-          <p><strong>Session record</strong>Your ID, question, and QBot response are stored in this experiment's robot.db.</p>
+          <p><strong>Session record</strong>Your survey, questions, and QBot responses are stored in this experiment's robot.db.</p>
         </div>
       </aside>
 
