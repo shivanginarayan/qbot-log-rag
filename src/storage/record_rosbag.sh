@@ -39,7 +39,7 @@ if [ -f "$REPO_DIR/robot_navigation/install/setup.bash" ]; then
     source "$REPO_DIR/robot_navigation/install/setup.bash"
 fi
 
-export ROS_DOMAIN_ID=57
+export ROS_DOMAIN_ID=63
 
 echo
 echo "Recording raw ROS evidence"
@@ -57,4 +57,10 @@ ros2 bag record \
     /amcl_pose \
     /cmd_vel \
     /tf \
-    /tf_static
+    /tf_static \
+    /controller/lb_held \
+    /cmd_vel_teleop \
+    /cmd_vel_behavior \
+    /cmd_vel_auto \
+    /robot/navigation_control_state \
+    /robot/manual_assistance_status

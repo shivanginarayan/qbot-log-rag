@@ -47,7 +47,7 @@ if [ -f "$REPO_DIR/.venv/bin/activate" ]; then
     source "$REPO_DIR/.venv/bin/activate"
 fi
 
-export ROS_DOMAIN_ID=57
+export ROS_DOMAIN_ID=63
 
 cd "$REPO_DIR"
 
@@ -115,7 +115,13 @@ ros2 bag record \
     /tf \
     /tf_static \
     /label \
-    /robot/navigation_status &
+    /robot/navigation_status \
+    /controller/lb_held \
+    /cmd_vel_teleop \
+    /cmd_vel_behavior \
+    /cmd_vel_auto \
+    /robot/navigation_control_state \
+    /robot/manual_assistance_status &
 PIDS+=($!)
 
 wait

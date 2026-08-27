@@ -24,6 +24,7 @@ try:
     import rclpy
     from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
     from nav_msgs.msg import OccupancyGrid
+    from rclpy.duration import Duration as RclpyDuration
     from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
     from std_msgs.msg import Empty as RosEmpty
     from std_msgs.msg import String as RosString
@@ -32,6 +33,7 @@ except ImportError as exc:
     PoseStamped = None
     PoseWithCovarianceStamped = None
     OccupancyGrid = None
+    RclpyDuration = None
     DurabilityPolicy = None
     HistoryPolicy = None
     QoSProfile = None
@@ -1139,31 +1141,6 @@ def write_labels(
         if temporary_path is not None and temporary_path.exists():
             temporary_path.unlink()
     return label_path, normalized
-
-
-def publish_label(label_name: str, topic: str, timeout: float, ros_domain_id: int = 63) -> None:
-    command = ["ros2", "topic", "pub", "--once", topic, "std_msgs/msg/String", json.dumps({"data": label_name})]
-    environment = os.environ.copy()
-    environment["ROS_DOMAIN_ID"] = str(ros_domain_id)
-    try:
-        result = subprocess.run(
-            command,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=environment,
-        )
-    except FileNotFoundError as exc:
-        raise RuntimeError("ros2 was not found; start the labeler from a ROS-sourced terminal") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(
-            f"No {topic} listener responded within {timeout:g} seconds on ROS domain "
-            f"{ros_domain_id}; is navigation running?"
-        ) from exc
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout).strip()
-        raise RuntimeError(detail or f"ros2 topic pub exited with status {result.returncode}")
 
 
 class NavigationConflictError(RuntimeError):
@@ -3035,6 +3012,19 @@ class MappingManager:
 class RobotPoseMonitor:
     """Keep AMCL, navigation results, and live Cartographer map data available."""
 
+    NAVIGATION_COMMAND_TARGET = "go_to_label"
+
+    @staticmethod
+    def navigation_command_qos():
+        return QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+            reliability=ReliabilityPolicy.RELIABLE,
+            # Never replay an old Go, Localize, or Stop command after
+            # go_to_label restarts.
+            durability=DurabilityPolicy.VOLATILE,
+        )
+
     def __init__(
         self,
         topic: str = "/amcl_pose",
@@ -3042,13 +3032,17 @@ class RobotPoseMonitor:
         mapping_pose_topic: str = "/tracked_pose",
         mapping_drop_topic: str = "/mapping/drop_label",
         manual_status_topic: str = "/robot/manual_assistance_status",
+        label_topic: str = "/label",
     ) -> None:
         self.topic = topic
         self.navigation_status_topic = navigation_status_topic
         self.mapping_pose_topic = mapping_pose_topic
         self.mapping_drop_topic = mapping_drop_topic
         self.manual_status_topic = manual_status_topic
+        self.label_topic = label_topic
         self.lock = threading.Lock()
+        self.navigation_condition = threading.Condition(self.lock)
+        self.label_publish_lock = threading.Lock()
         self.pose: dict | None = None
         self.mapping_pose: dict | None = None
         self.navigation_event: dict | None = None
@@ -3065,9 +3059,11 @@ class RobotPoseMonitor:
         self.mapping_pose_subscription = None
         self.mapping_drop_subscription = None
         self.manual_status_subscription = None
+        self.label_publisher = None
         self.mapping_manager = None
         self.navigation_manager = None
         self.thread: threading.Thread | None = None
+        self.stopping = False
 
     def connect_managers(
         self,
@@ -3083,6 +3079,7 @@ class RobotPoseMonitor:
             or PoseStamped is None
             or PoseWithCovarianceStamped is None
             or OccupancyGrid is None
+            or RclpyDuration is None
             or RosEmpty is None
             or RosString is None
         ):
@@ -3091,9 +3088,15 @@ class RobotPoseMonitor:
 
         os.environ["ROS_DOMAIN_ID"] = str(ros_domain_id)
         try:
+            self.stopping = False
             if not rclpy.ok():
                 rclpy.init(args=None)
             self.node = rclpy.create_node("qbot_map_labeler_pose_monitor")
+            self.label_publisher = self.node.create_publisher(
+                RosString,
+                self.label_topic,
+                self.navigation_command_qos(),
+            )
             self.subscription = self.node.create_subscription(
                 PoseWithCovarianceStamped,
                 self.topic,
@@ -3158,6 +3161,111 @@ class RobotPoseMonitor:
             with self.lock:
                 self.error = f"Pose monitor stopped: {exc}"
 
+    @classmethod
+    def is_navigation_command_target(cls, endpoint) -> bool:
+        """Return true only for go_to_label, never a recorder subscriber."""
+        return (
+            str(getattr(endpoint, "node_name", "")).strip()
+            == cls.NAVIGATION_COMMAND_TARGET
+        )
+
+    def publish_navigation_command(self, command: str, timeout: float) -> None:
+        """Publish after go_to_label is discovered and confirm reliable delivery."""
+        value = str(command).strip()
+        if not value:
+            raise ValueError("Navigation command cannot be empty")
+        if timeout <= 0.0:
+            raise ValueError("Navigation command timeout must be positive")
+        if (
+            self.stopping
+            or self.node is None
+            or self.label_publisher is None
+            or RosString is None
+            or RclpyDuration is None
+        ):
+            raise RuntimeError(
+                self.error
+                or "The map labeler's persistent ROS command publisher is unavailable"
+            )
+
+        deadline = time.monotonic() + float(timeout)
+        graph_error = ""
+        topic_name = str(
+            getattr(self.label_publisher, "topic_name", self.label_topic)
+        )
+        while True:
+            try:
+                endpoints = self.node.get_subscriptions_info_by_topic(topic_name)
+                graph_error = ""
+            except Exception as exc:
+                endpoints = []
+                graph_error = str(exc)
+            if any(self.is_navigation_command_target(item) for item in endpoints):
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                detail = f" ({graph_error})" if graph_error else ""
+                raise RuntimeError(
+                    f"No {topic_name} subscription from go_to_label appeared "
+                    f"within {timeout:g} seconds{detail}; recorder subscriptions "
+                    "do not count as command delivery"
+                )
+            time.sleep(min(0.05, remaining))
+
+        message = RosString()
+        message.data = value
+        with self.label_publish_lock:
+            self.label_publisher.publish(message)
+        remaining = max(0.0, deadline - time.monotonic())
+        try:
+            acknowledged = self.label_publisher.wait_for_all_acked(
+                RclpyDuration(seconds=remaining)
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Could not confirm delivery of the {topic_name} command: {exc}"
+            ) from exc
+        if not acknowledged:
+            raise RuntimeError(
+                f"go_to_label did not acknowledge the {topic_name} command "
+                f"within {timeout:g} seconds"
+            )
+
+    def navigation_event_sequence(self) -> int:
+        with self.lock:
+            return int(self.navigation_sequence)
+
+    def wait_for_navigation_event(
+        self,
+        *,
+        after_sequence: int,
+        name: str,
+        timeout: float,
+        events=("running", "finished"),
+    ) -> dict | None:
+        """Wait for a newer matching application-level navigation event."""
+        deadline = time.monotonic() + float(timeout)
+        wanted_name = str(name).strip().casefold()
+        wanted_events = {str(event).strip().casefold() for event in events}
+        with self.navigation_condition:
+            while True:
+                current = self.navigation_event
+                if (
+                    current is not None
+                    and int(current.get("sequence") or 0) > int(after_sequence)
+                    and str(current.get("name") or "").strip().casefold()
+                    == wanted_name
+                    and str(current.get("event") or "").strip().casefold()
+                    in wanted_events
+                ):
+                    return dict(current)
+                if self.stopping:
+                    return None
+                remaining = deadline - time.monotonic()
+                if remaining <= 0.0:
+                    return None
+                self.navigation_condition.wait(timeout=remaining)
+
     def pose_callback(self, message) -> None:
         pose = message.pose.pose
         orientation = pose.orientation
@@ -3217,7 +3325,7 @@ class RobotPoseMonitor:
             status = int(raw_status) if raw_status is not None else None
         except (TypeError, ValueError):
             status = None
-        with self.lock:
+        with self.navigation_condition:
             previous = self.navigation_event or {}
             same_goal = (
                 str(previous.get("name") or "").casefold()
@@ -3241,6 +3349,7 @@ class RobotPoseMonitor:
                 "received_at": time.time(),
             }
             self.navigation_event = stored
+            self.navigation_condition.notify_all()
             return dict(stored)
 
     def navigation_status_callback(self, message) -> None:
@@ -3556,6 +3665,9 @@ class RobotPoseMonitor:
         }
 
     def stop(self) -> None:
+        with self.navigation_condition:
+            self.stopping = True
+            self.navigation_condition.notify_all()
         if rclpy is not None and rclpy.ok():
             rclpy.shutdown()
         if self.thread is not None:
@@ -3568,6 +3680,8 @@ class RobotPoseMonitor:
         self.mapping_map_subscription = None
         self.mapping_pose_subscription = None
         self.mapping_drop_subscription = None
+        self.manual_status_subscription = None
+        self.label_publisher = None
         self.thread = None
 
 
@@ -3662,6 +3776,21 @@ class Handler(BaseHTTPRequestHandler):
         if monitor is None or not hasattr(monitor, "navigation_snapshot"):
             return None
         return monitor
+
+    def send_navigation_command(
+        self, command: str, timeout: float | None = None
+    ) -> None:
+        monitor = self.goal_monitor()
+        if monitor is None or not hasattr(monitor, "publish_navigation_command"):
+            raise RuntimeError(
+                "The persistent ROS navigation command bridge is unavailable"
+            )
+        command_timeout = (
+            float(timeout)
+            if timeout is not None
+            else float(getattr(self.server, "go_timeout", 10))
+        )
+        monitor.publish_navigation_command(command, command_timeout)
 
     def require_navigation_map(self, map_name: str) -> None:
         manager = self.navigation_manager()
@@ -3896,16 +4025,13 @@ class Handler(BaseHTTPRequestHandler):
                 with self.server.navigation_lock:
                     stop_generation = self.server.stop_generation
                 try:
-                    publish_label(
+                    self.send_navigation_command(
                         json.dumps(
                             {
                                 "label_id": label["id"],
                                 "name": label["name"],
                             }
-                        ),
-                        topic,
-                        float(getattr(self.server, "go_timeout", 10)),
-                        ros_domain_id,
+                        )
                     )
                 except Exception as exc:
                     if monitor is not None:
@@ -3914,14 +4040,8 @@ class Handler(BaseHTTPRequestHandler):
                 with self.server.navigation_lock:
                     cancelled_by_stop = self.server.stop_generation != stop_generation
                 if cancelled_by_stop:
-                    # A concurrent Stop may have reached DDS before this short-lived Go
-                    # publisher. Publish Stop again to guarantee Stop wins the race.
-                    publish_label(
-                        "__stop_navigation__",
-                        topic,
-                        float(getattr(self.server, "go_timeout", 10)),
-                        ros_domain_id,
-                    )
+                    # Re-publish Stop after a concurrent Go so Stop wins the race.
+                    self.send_navigation_command("__stop_navigation__")
                 self.write_json(
                     {
                         "name": label["name"],
@@ -3941,12 +4061,7 @@ class Handler(BaseHTTPRequestHandler):
                 manager = self.navigation_manager()
                 if manager is not None and hasattr(manager, "fail_localization"):
                     manager.fail_localization("Localization was stopped")
-                publish_label(
-                    "__stop_navigation__",
-                    topic,
-                    float(getattr(self.server, "go_timeout", 10)),
-                    ros_domain_id,
-                )
+                self.send_navigation_command("__stop_navigation__")
                 self.write_json(
                     {
                         "stopped": True,
@@ -3961,34 +4076,82 @@ class Handler(BaseHTTPRequestHandler):
                 manager = self.navigation_manager()
                 if manager is None:
                     raise RuntimeError("Navigation manager is not configured")
+                monitor = self.goal_monitor()
+                if (
+                    monitor is None
+                    or not hasattr(monitor, "navigation_event_sequence")
+                    or not hasattr(monitor, "wait_for_navigation_event")
+                ):
+                    raise RuntimeError(
+                        "The navigation status acknowledgement monitor is unavailable"
+                    )
                 topic = str(getattr(self.server, "label_topic", "/label"))
                 ros_domain_id = int(getattr(self.server, "ros_domain_id", 63))
+                command_timeout = float(getattr(self.server, "go_timeout", 10))
+                command_deadline = time.monotonic() + command_timeout
+                acknowledgement_sequence = monitor.navigation_event_sequence()
                 if hasattr(manager, "begin_localization"):
                     manager.begin_localization()
                 with self.server.navigation_lock:
                     stop_generation = self.server.stop_generation
                 try:
-                    publish_label(
+                    self.send_navigation_command(
                         "__localize__",
-                        topic,
-                        float(getattr(self.server, "go_timeout", 10)),
-                        ros_domain_id,
+                        timeout=max(0.001, command_deadline - time.monotonic()),
                     )
-                except Exception:
+                except Exception as exc:
                     if hasattr(manager, "fail_localization"):
-                        manager.fail_localization("Could not publish the localization command")
+                        manager.fail_localization(
+                            f"Could not deliver the localization command: {exc}"
+                        )
                     raise
                 with self.server.navigation_lock:
                     cancelled_by_stop = self.server.stop_generation != stop_generation
                 if cancelled_by_stop:
                     if hasattr(manager, "fail_localization"):
                         manager.fail_localization("Localization was stopped")
-                    publish_label(
-                        "__stop_navigation__",
-                        topic,
-                        float(getattr(self.server, "go_timeout", 10)),
-                        ros_domain_id,
+                    self.send_navigation_command("__stop_navigation__")
+                else:
+                    acknowledgement = monitor.wait_for_navigation_event(
+                        after_sequence=acknowledgement_sequence,
+                        name="localize",
+                        timeout=max(0.0, command_deadline - time.monotonic()),
                     )
+                    with self.server.navigation_lock:
+                        cancelled_by_stop = (
+                            self.server.stop_generation != stop_generation
+                        )
+                    if cancelled_by_stop:
+                        if hasattr(manager, "fail_localization"):
+                            manager.fail_localization("Localization was stopped")
+                    elif acknowledgement is None:
+                        message = (
+                            "go_to_label did not publish a localization start "
+                            f"acknowledgement within {command_timeout:g} seconds; "
+                            "localization was stopped"
+                        )
+                        if hasattr(manager, "fail_localization"):
+                            manager.fail_localization(message)
+                        stop_error = ""
+                        try:
+                            self.send_navigation_command(
+                                "__stop_navigation__",
+                                timeout=min(2.0, command_timeout),
+                            )
+                        except Exception as exc:
+                            stop_error = f"; the fallback Stop also failed: {exc}"
+                        raise RuntimeError(message + stop_error)
+                    elif (
+                        acknowledgement.get("event") == "finished"
+                        and acknowledgement.get("outcome") != "succeeded"
+                    ):
+                        message = str(
+                            acknowledgement.get("message")
+                            or "Localization was acknowledged but failed to start"
+                        )
+                        if hasattr(manager, "fail_localization"):
+                            manager.fail_localization(message)
+                        raise RuntimeError(message)
                 self.write_json(
                     {
                         "localizing": not cancelled_by_stop,
@@ -4097,7 +4260,12 @@ def main() -> None:
         default=1,
         help="Zero-based game-controller button bit used to drop a mapping label",
     )
-    parser.add_argument("--go-timeout", type=float, default=10, help="Seconds to wait for the ROS label publication")
+    parser.add_argument(
+        "--go-timeout",
+        type=float,
+        default=10,
+        help="Seconds to wait for go_to_label command and status acknowledgement",
+    )
     parser.add_argument(
         "--navigation-timeout",
         type=float,
@@ -4152,6 +4320,7 @@ def main() -> None:
         args.navigation_status_topic,
         args.mapping_pose_topic,
         args.mapping_drop_topic,
+        label_topic=args.label_topic,
     )
     server.pose_monitor = pose_monitor
     coordinator = RobotOperationCoordinator()
@@ -4181,7 +4350,7 @@ def main() -> None:
     pose_monitor.start(args.ros_domain_id)
     print(f"Map label GUI: http://{args.host}:{args.port}")
     print(f"Serving maps from: {MAPS_DIR}")
-    print(f"Go publishes labels on: {args.label_topic}")
+    print(f"Persistent navigation command topic: {args.label_topic}")
     print(f"Go uses ROS domain: {args.ros_domain_id}")
     print(f"Live robot pose topic: {args.pose_topic}")
     print(f"Navigation result topic: {args.navigation_status_topic}")
