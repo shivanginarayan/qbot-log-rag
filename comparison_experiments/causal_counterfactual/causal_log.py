@@ -2,20 +2,15 @@
 import json
 import sqlite3
 
-COMMAND_TYPES = {
-    "NAVIGATION_COMMAND",
-    "LOCALIZE_COMMAND",
-}
+COMMAND_TYPES = {"NAVIGATION_COMMAND", "LOCALIZE_COMMAND"}
 START_TYPE = "NAVIGATION_STARTED"
 FINISH_TYPE = "NAVIGATION_FINISHED"
 
-def _normalize(value):
-    if value is None:
-        return None
-    return str(value).strip().casefold()
+def _norm(v):
+    return None if v is None else str(v).strip().casefold()
 
 def _payload(row):
-    raw = row.get("payload_json")
+    raw = (row or {}).get("payload_json")
     if not raw:
         return {}
     try:
@@ -26,119 +21,147 @@ def _payload(row):
 def load_task_events(db_path):
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        """
-        SELECT
-            task_event_id,
-            session_id,
-            event_time_ns,
-            source_topic,
-            event_type,
-            map_name,
-            label_id,
-            label_name,
-            task_type,
-            status,
-            payload_json
+    rows = conn.execute("""
+        SELECT task_event_id, session_id, event_time_ns, source_topic,
+               event_type, map_name, label_id, label_name, task_type,
+               status, payload_json
         FROM task_events
         ORDER BY event_time_ns
-        """
-    ).fetchall()
+    """).fetchall()
     conn.close()
-    return [dict(row) for row in rows]
+    return [dict(r) for r in rows]
 
-def same_task(command, event):
-    if command.get("session_id") != event.get("session_id"):
+def same_task(a, b):
+    if not a or not b:
         return False
-
-    command_task = _normalize(command.get("task_type"))
-    event_task = _normalize(event.get("task_type"))
-
-    if command_task != event_task:
+    if a.get("session_id") != b.get("session_id"):
         return False
-
-    if command_task == "navigate_to_location":
-        c = _normalize(command.get("label_name"))
-        e = _normalize(event.get("label_name"))
-        if c and e and c != e:
+    ta, tb = _norm(a.get("task_type")), _norm(b.get("task_type"))
+    if ta != tb:
+        return False
+    if ta == "navigate_to_location":
+        la, lb = _norm(a.get("label_name")), _norm(b.get("label_name"))
+        if la and lb and la != lb:
             return False
-
     return True
 
-def outcome_from_status(status):
-    value = str(status)
-    if value == "4":
-        return "succeeded"
-    if value == "5":
-        return "canceled"
-    if value == "6":
-        return "failed"
-    return "finished_unknown"
+def _outcome(status):
+    return {"4":"succeeded","5":"canceled","6":"failed"}.get(
+        str(status), "finished_unknown"
+    )
+
+def _make_occurrence(command=None, started=None, finished=None):
+    if finished:
+        outcome = _outcome(finished.get("status"))
+    elif started:
+        outcome = "started_no_completion_recorded"
+    elif command:
+        outcome = "no_execution_start_recorded"
+    else:
+        outcome = "unknown"
+
+    occ = {
+        "command": command,
+        "started": started,
+        "finished": finished,
+        "outcome": outcome,
+        "request_recorded": command is not None,
+        "execution_start_recorded": started is not None,
+        "completion_recorded": finished is not None,
+    }
+    occ["causal_log"] = build_causal_log(occ)
+    occ["counterfactuals"] = build_counterfactuals(occ)
+    return occ
 
 def build_occurrences(events):
-    result = []
+    occurrences = []
+    used = set()
 
-    for index, command in enumerate(events):
+    # Command-led occurrences.
+    for i, command in enumerate(events):
         if command.get("event_type") not in COMMAND_TYPES:
             continue
-
         started = None
         finished = None
-        command_task = _normalize(command.get("task_type"))
-
-        for later in events[index + 1:]:
+        task = _norm(command.get("task_type"))
+        for later in events[i+1:]:
             if later.get("session_id") != command.get("session_id"):
                 break
-
-            later_type = later.get("event_type")
-            later_task = _normalize(later.get("task_type"))
-
-            if later_type in COMMAND_TYPES and later_task == command_task:
+            if later.get("event_type") in COMMAND_TYPES and _norm(later.get("task_type")) == task:
                 break
-
             if not same_task(command, later):
                 continue
-
-            if started is None and later_type == START_TYPE:
+            if started is None and later.get("event_type") == START_TYPE:
                 started = later
                 continue
-
-            if later_type == FINISH_TYPE:
+            if later.get("event_type") == FINISH_TYPE:
                 finished = later
                 break
+        occ = _make_occurrence(command, started, finished)
+        occurrences.append(occ)
+        for e in (command, started, finished):
+            if e:
+                used.add(e.get("task_event_id"))
 
-        if finished is not None:
-            outcome = outcome_from_status(finished.get("status"))
-        elif started is not None:
-            outcome = "started_no_completion_recorded"
-        else:
-            outcome = "no_execution_start_recorded"
+    # Orphan STARTED -> FINISHED.
+    for i, started in enumerate(events):
+        if started.get("event_type") != START_TYPE:
+            continue
+        if started.get("task_event_id") in used:
+            continue
+        finished = None
+        for later in events[i+1:]:
+            if later.get("session_id") != started.get("session_id"):
+                break
+            if later.get("event_type") == START_TYPE and _norm(later.get("task_type")) == _norm(started.get("task_type")):
+                break
+            if same_task(started, later) and later.get("event_type") == FINISH_TYPE:
+                finished = later
+                break
+        occ = _make_occurrence(None, started, finished)
+        occurrences.append(occ)
+        used.add(started.get("task_event_id"))
+        if finished:
+            used.add(finished.get("task_event_id"))
 
-        occurrence = {
-            "command": command,
-            "started": started,
-            "finished": finished,
-            "outcome": outcome,
-        }
+    # Orphan FINISHED.
+    for finished in events:
+        if finished.get("event_type") != FINISH_TYPE:
+            continue
+        if finished.get("task_event_id") in used:
+            continue
+        occurrences.append(_make_occurrence(None, None, finished))
+        used.add(finished.get("task_event_id"))
 
-        occurrence["causal_log"] = build_causal_log(occurrence)
-        occurrence["counterfactuals"] = build_counterfactuals(occurrence)
+    def t(occ):
+        for key in ("command","started","finished"):
+            e = occ.get(key)
+            if e:
+                return e.get("event_time_ns", 0)
+        return 0
 
-        result.append(occurrence)
+    occurrences.sort(key=t)
+    return occurrences
 
-    return result
-
-def build_causal_log(occurrence):
-    command = occurrence.get("command") or {}
-    started = occurrence.get("started") or {}
-    finished = occurrence.get("finished") or {}
+def build_causal_log(occ):
+    command = occ.get("command") or {}
+    started = occ.get("started") or {}
+    finished = occ.get("finished") or {}
     message = _payload(finished).get("message")
+    entries = []
 
-    entries = [{
-        "cause": "user_or_system_request_recorded",
-        "effect": "task_request_exists",
-        "evidence": command.get("event_type"),
-    }]
+    if command:
+        entries.append({
+            "cause": "user_or_system_request_recorded",
+            "effect": "task_request_exists",
+            "evidence": command.get("event_type"),
+        })
+    else:
+        entries.append({
+            "observation": "request_event_not_recorded",
+            "meaning": "The request stage is unavailable in task_events for this occurrence.",
+            "warning": "Do not infer that no request occurred.",
+        })
 
     if started:
         entries.append({
@@ -150,7 +173,7 @@ def build_causal_log(occurrence):
     if finished:
         entries.append({
             "cause": "completion_event_recorded",
-            "effect": occurrence.get("outcome"),
+            "effect": occ.get("outcome"),
             "evidence": {
                 "event_type": FINISH_TYPE,
                 "status": finished.get("status"),
@@ -158,71 +181,45 @@ def build_causal_log(occurrence):
             },
         })
 
-    if occurrence.get("outcome") == "failed" and message:
+    if occ.get("outcome") == "failed" and message:
         entries.append({
             "cause": "recorded_failure_condition",
             "effect": "task_failed",
             "evidence": message,
-            "note": (
-                "This adapted baseline treats the explicit completion "
-                "message as the causal-log failure condition."
-            ),
+            "note": "Adapted baseline treats the explicit completion message as its causal-log failure condition.",
         })
 
     return entries
 
-def build_counterfactuals(occurrence):
-    finished = occurrence.get("finished") or {}
+def build_counterfactuals(occ):
+    finished = occ.get("finished") or {}
     message = _payload(finished).get("message")
-    outcome = occurrence.get("outcome")
-
-    result = []
-
-    if outcome == "no_execution_start_recorded":
-        result.append({
-            "change": "execution_start_recorded = true",
-            "would_change": (
-                "the explanation from request-only to task-entered-execution"
-            ),
-            "does_not_prove": "that the task would succeed",
-        })
-
-    if outcome == "failed" and message:
-        result.append({
-            "change": (
-                "the recorded failure condition described by the "
-                "completion message is absent"
-            ),
-            "would_change": (
-                "this specific failure condition would no longer explain "
-                "the observed failure"
-            ),
-            "does_not_prove": (
-                "that the overall task would necessarily succeed"
-            ),
+    out = []
+    if occ.get("outcome") == "failed" and message:
+        out.append({
+            "change": "the recorded failure condition is absent",
+            "would_change": "this specific failure condition would no longer explain the observed failure",
+            "does_not_prove": "that the overall task would necessarily succeed",
             "observed_failure_condition": message,
         })
+    return out
 
-    return result
-
-def compact_occurrence(occurrence):
-    command = occurrence.get("command") or {}
-    started = occurrence.get("started") or {}
-    finished = occurrence.get("finished") or {}
-
+def compact_occurrence(occ):
+    command = occ.get("command") or {}
+    started = occ.get("started") or {}
+    finished = occ.get("finished") or {}
     return {
-        "task_event_id": command.get("task_event_id"),
-        "task_type": command.get("task_type"),
-        "label": command.get("label_name"),
-        "map": (
-            command.get("map_name")
-            or started.get("map_name")
-            or finished.get("map_name")
-        ),
+        "task_event_id": command.get("task_event_id") or started.get("task_event_id") or finished.get("task_event_id"),
+        "task_type": command.get("task_type") or started.get("task_type") or finished.get("task_type"),
+        "label": command.get("label_name") or started.get("label_name") or finished.get("label_name"),
+        "map": command.get("map_name") or started.get("map_name") or finished.get("map_name"),
+        "request_recorded": occ.get("request_recorded"),
+        "execution_start_recorded": occ.get("execution_start_recorded"),
+        "completion_recorded": occ.get("completion_recorded"),
         "command_time_ns": command.get("event_time_ns"),
         "execution_start_ns": started.get("event_time_ns"),
         "finish_ns": finished.get("event_time_ns"),
-        "outcome": occurrence.get("outcome"),
-        "causal_log": occurrence.get("causal_log"),
-        "counterfactuals": occurrence.get("counterfactuals"),
+        "outcome": occ.get("outcome"),
+        "causal_log": occ.get("causal_log"),
+        "counterfactuals": occ.get("counterfactuals"),
     }

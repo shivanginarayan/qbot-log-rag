@@ -12,64 +12,57 @@ if str(COMPARISON_ROOT) not in sys.path:
 from common.nvidia_client import call_nemotron
 from common.session_utils import robot_db_path
 from causal_counterfactual.causal_log import (
-    load_task_events,
-    build_occurrences,
-    compact_occurrence,
+    load_task_events, build_occurrences, compact_occurrence
 )
+
+def occ_task_type(occ):
+    for key in ("command","started","finished"):
+        e = occ.get(key) or {}
+        if e.get("task_type"):
+            return str(e.get("task_type")).casefold()
+    return ""
 
 def select_occurrences(question, occurrences, limit=8):
     q = question.casefold()
     selected = list(occurrences)
 
     if "localiz" in q:
-        filtered = [
-            x for x in selected
-            if str((x.get("command") or {}).get("task_type")).casefold()
-            == "localization"
-        ]
-        if filtered:
-            selected = filtered
-
+        f = [x for x in selected if occ_task_type(x) == "localization"]
+        if f: selected = f
     elif "navigat" in q or "go to" in q:
-        filtered = [
-            x for x in selected
-            if str((x.get("command") or {}).get("task_type")).casefold()
-            == "navigate_to_location"
-        ]
-        if filtered:
-            selected = filtered
+        f = [x for x in selected if occ_task_type(x) == "navigate_to_location"]
+        if f: selected = f
 
     if "fail" in q:
-        filtered = [x for x in selected if x.get("outcome") == "failed"]
-        if filtered:
-            selected = filtered
+        f = [x for x in selected if x.get("outcome") == "failed"]
+        if f: selected = f
     elif "success" in q or "succeed" in q:
-        filtered = [x for x in selected if x.get("outcome") == "succeeded"]
-        if filtered:
-            selected = filtered
+        f = [x for x in selected if x.get("outcome") == "succeeded"]
+        if f: selected = f
 
-    selected.sort(
-        key=lambda x: (x.get("command") or {}).get("event_time_ns", 0),
-        reverse=True,
-    )
+    def when(x):
+        for key in ("command","started","finished"):
+            e = x.get(key) or {}
+            if e.get("event_time_ns") is not None:
+                return e.get("event_time_ns")
+        return 0
+
+    selected.sort(key=when, reverse=True)
     return selected[:limit]
 
 def role_instructions(role):
     if role == "engineer":
         return (
-            "ROLE: ENGINEER\n"
-            "Use technical terminology when useful. Preserve recorded "
-            "messages and distinguish fixed-model assumptions from evidence."
+            "ROLE: ENGINEER\nUse technical terminology when useful. "
+            "Preserve recorded messages and distinguish model assumptions from evidence."
         )
     return (
-        "ROLE: END USER\n"
-        "Use plain language. Focus on what happened and why according "
-        "to the fixed causal log."
+        "ROLE: END USER\nUse plain language. Focus on what happened and why "
+        "according to the fixed causal log."
     )
 
 def build_prompt(question, session_id, role, selected):
     evidence = [compact_occurrence(x) for x in selected]
-
     return f"""
 You are generating an explanation from an adapted fixed causal-log
 and temporal-counterfactual robot-navigation model.
@@ -81,8 +74,9 @@ Use only the supplied causal log and counterfactual statements.
 Important:
 - do not invent causes;
 - temporal order alone is not proof of causation;
-- a recorded failure message is treated as the explicit failure
-  condition for this adapted baseline;
+- a missing request event means the request stage is unavailable in this evidence,
+  not that no request physically occurred;
+- a recorded failure message is treated as the explicit failure condition;
 - removing one failure condition does not prove the whole task succeeds;
 - if the model lacks enough causal information, say so.
 
@@ -99,17 +93,13 @@ Answer directly.
 """.strip()
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--session-id", default="latest")
-    parser.add_argument("--question", required=True)
-    parser.add_argument(
-        "--role",
-        choices=["user", "engineer"],
-        default="user",
-    )
-    parser.add_argument("--show-model", action="store_true")
-    parser.add_argument("--no-llm", action="store_true")
-    args = parser.parse_args()
+    p = argparse.ArgumentParser()
+    p.add_argument("--session-id", default="latest")
+    p.add_argument("--question", required=True)
+    p.add_argument("--role", choices=["user","engineer"], default="user")
+    p.add_argument("--show-model", action="store_true")
+    p.add_argument("--no-llm", action="store_true")
+    args = p.parse_args()
 
     session_id, db_path = robot_db_path(args.session_id)
     events = load_task_events(db_path)
@@ -128,10 +118,7 @@ def main():
         print()
         print("MODEL EVIDENCE")
         print("=" * 70)
-        print(json.dumps(
-            [compact_occurrence(x) for x in selected],
-            indent=2,
-        ))
+        print(json.dumps([compact_occurrence(x) for x in selected], indent=2))
 
     if args.no_llm:
         return
@@ -141,14 +128,9 @@ def main():
         print("No matching task occurrence was available.")
         return
 
-    answer = call_nemotron(
-        build_prompt(
-            args.question,
-            session_id,
-            args.role,
-            selected,
-        )
-    )
+    answer = call_nemotron(build_prompt(
+        args.question, session_id, args.role, selected
+    ))
 
     print()
     print("ANSWER")
