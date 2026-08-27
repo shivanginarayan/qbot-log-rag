@@ -57,3 +57,6 @@ robot_navigation/runtime_logs/
 .venv/
 test_robot.db
 runtime_logs/behavior_embeddings.json
+
+# Robot-generated map files
+robot_navigation/maps/*
