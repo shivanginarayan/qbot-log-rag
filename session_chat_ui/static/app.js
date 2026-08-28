@@ -356,9 +356,9 @@ function renderSystems() {
 
     const button = ensureSystemButton(id);
     const isTarget = id === switchingTo;
-    const selectable = entry.state === "ready"
-      || entry.state === "needs_preparation"
-      || entry.state === "failed";
+    // Only ready systems are clickable. The Explaining-autonomy baseline is
+    // deferred, so its slot stays greyed with a "coming soon" note.
+    const selectable = Boolean(entry.actionable);
     // While switching, only the incoming system is highlighted: the outgoing
     // one is already put away.
     const highlighted = switchingTo ? isTarget : id === activeSystem;
@@ -490,47 +490,17 @@ async function selectSystem(id) {
   const entry = systemEntry(id);
   if (!entry) return;
 
-  if (entry.state === "ready") {
-    if (id === activeSystem) return;
-    setNotice("");
-    await applySystem(id);
-    setNotice(`${entry.label} is ready.`);
-    return;
-  }
-
-  if (entry.state !== "needs_preparation" && entry.state !== "failed") {
+  // Only ready systems can be selected. Non-ready ones (e.g. the deferred
+  // "coming soon" baseline) just report their anonymized status.
+  if (!entry.actionable) {
     setNotice(systemHeadline(entry));
     return;
   }
 
-  switchingTo = id;
-  systemEpoch += 1;
+  if (id === activeSystem) return;
   setNotice("");
-  updateComposerLock();
-  renderSystems();
-
-  try {
-    const response = await fetch("/api/system/prepare", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      cache: "no-store",
-      body: JSON.stringify({ system: id }),
-    });
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.error || "That system could not be prepared.");
-    }
-
-    storeSystemState(data.system);
-    renderSystems();
-    updateFastStatusPolling();
-  } catch (error) {
-    switchingTo = "";
-    updateComposerLock();
-    renderSystems();
-    updateFastStatusPolling();
-    setNotice(error.message || "That system could not be prepared.");
-  }
+  await applySystem(id);
+  setNotice(`${entry.label} is ready.`);
 }
 
 function resolveSwitchProgress() {

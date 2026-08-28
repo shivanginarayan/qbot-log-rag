@@ -8,9 +8,11 @@ stores each exchange in the experiment session's robot.db database.
 """
 
 import argparse
+import hashlib
 import ipaddress
 import json
 import os
+import random
 import re
 import sqlite3
 import subprocess
@@ -73,7 +75,10 @@ SYSTEMS = {
         "evidence_pattern": PACKET_PATTERN,
     },
     "rosout": {
-        "label": "/rosout RAG baseline",
+        # True identity, used only in logs and analysis. Participants see an
+        # anonymous "System X"; this baseline is not implemented yet, so its
+        # button stays greyed out as "coming soon".
+        "label": "Explaining autonomy",
         "description": (
             "Explaining-Autonomy style: BGE-M3 semantic retrieval over this "
             "session's /rosout log messages. Ignores answer style."
@@ -94,6 +99,14 @@ SYSTEMS = {
 
 MISSING_API_KEY_DETAIL = "Enter the NVIDIA API key to use this system."
 EMBEDDING_OFFLINE_DETAIL = "The local embedding service is offline."
+
+# The chat page shows the three systems as anonymous "System A/B/C" so a
+# participant cannot recognise the pipeline behind an answer. Each participant
+# gets a stable random letter->system permutation derived from their User ID.
+SYSTEM_SLOT_SALT = "qbot-system-blinding-v1"
+SYSTEM_SLOTS = ("A", "B", "C")
+COMING_SOON_DETAIL = "Coming soon."
+UNAVAILABLE_DETAIL = "Currently unavailable."
 
 DEMOGRAPHIC_QUESTIONS = (
     {
@@ -237,6 +250,30 @@ def has_control_characters(value):
 def system_label(system):
     entry = SYSTEMS.get(system)
     return entry["label"] if entry else str(system)
+
+
+def assign_slots(user_id):
+    """Map anonymous slots A/B/C to real system ids for one participant.
+
+    The permutation is derived from the User ID, so it is identical across
+    reloads, logins, sessions and server restarts, needs no stored randomness,
+    and is still evenly distributed across users. An empty User ID (only seen
+    before login, when the toggle is not shown) falls back to registry order.
+    """
+
+    system_ids = list(SYSTEMS)
+    clean_user_id = (user_id or "").strip()
+
+    if clean_user_id:
+        digest = hashlib.sha256(
+            (SYSTEM_SLOT_SALT + clean_user_id).encode("utf-8")
+        ).digest()
+        seed = int.from_bytes(digest[:8], "big")
+        ordered = random.Random(seed).sample(system_ids, k=len(system_ids))
+    else:
+        ordered = system_ids
+
+    return list(zip(SYSTEM_SLOTS, ordered))
 
 
 def rosout_index_path(session_id):
@@ -495,6 +532,19 @@ class ChatStore:
             answered_at_ns INTEGER NOT NULL,
             answered_at_iso TEXT NOT NULL,
             PRIMARY KEY (session_id, user_id, question_index),
+            FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+        )
+    """
+
+    SYSTEM_ASSIGNMENT_SCHEMA = """
+        CREATE TABLE IF NOT EXISTS ui_system_assignments (
+            session_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            slot TEXT NOT NULL,
+            system TEXT NOT NULL,
+            assigned_at_ns INTEGER NOT NULL,
+            assigned_at_iso TEXT NOT NULL,
+            PRIMARY KEY (session_id, user_id, slot),
             FOREIGN KEY (session_id) REFERENCES sessions(session_id)
         )
     """
@@ -772,6 +822,43 @@ class ChatStore:
                     logged_in_at_iso,
                 ),
             )
+
+        self._write(session["database"], operation)
+
+    def record_system_assignment(self, session, user_id):
+        """Persist this participant's slot->system map for later de-anonymizing.
+
+        Idempotent: the deterministic assignment is written once per user with
+        INSERT OR IGNORE, so repeated logins do not duplicate or change it.
+        """
+
+        assigned_at_ns, assigned_at_iso = utc_now()
+        assignment = assign_slots(user_id)
+
+        def operation(connection):
+            connection.execute(self.SYSTEM_ASSIGNMENT_SCHEMA)
+            for slot, system in assignment:
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO ui_system_assignments (
+                        session_id,
+                        user_id,
+                        slot,
+                        system,
+                        assigned_at_ns,
+                        assigned_at_iso
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        session["session_id"],
+                        user_id,
+                        slot,
+                        system,
+                        assigned_at_ns,
+                        assigned_at_iso,
+                    ),
+                )
 
         self._write(session["database"], operation)
 
@@ -1061,8 +1148,10 @@ class RagRunner:
         )
         if not Path(required_script).is_file():
             raise RagFailure(
-                "The {} command is unavailable.".format(system_label(system)),
-                "Missing file: " + str(required_script),
+                "This explanation system is unavailable.",
+                "{} command missing: {}".format(
+                    system_label(system), required_script
+                ),
             )
 
         if not api_key:
@@ -1102,10 +1191,8 @@ class RagRunner:
             ) from exc
         except OSError as exc:
             raise RagFailure(
-                "The {} process could not be started.".format(
-                    system_label(system)
-                ),
-                str(exc),
+                "This explanation system could not be started.",
+                "{} process error: {}".format(system_label(system), exc),
             ) from exc
 
         if completed.returncode != 0:
@@ -1118,9 +1205,7 @@ class RagRunner:
             )
             details = details.replace(api_key, "[REDACTED]")
             raise RagFailure(
-                "The {} pipeline could not answer this question.".format(
-                    system_label(system)
-                ),
+                "This explanation system could not answer this question.",
                 details,
             )
 
@@ -1136,9 +1221,7 @@ class RagRunner:
 
         if not answer:
             raise RagFailure(
-                "The {} pipeline returned an empty answer.".format(
-                    system_label(system)
-                ),
+                "This explanation system returned an empty answer.",
                 "{} completed without answer text".format(system_label(system)),
             )
 
@@ -1571,28 +1654,63 @@ class ChatApplication:
             None,
         )
 
-    def system_states(self, session, api_key_configured, embedding_ready):
+    @staticmethod
+    def _participant_detail(system, state, detail):
+        """Anonymized status text for the blind chat page.
+
+        The real reasons (missing /rosout bag, no task_events table) would
+        reveal which pipeline a slot is, so participants see generic text.
+        """
+
+        if state == "ready":
+            return ""
+        if state == "blocked":
+            return MISSING_API_KEY_DETAIL
+        if state == "preparing":
+            return "Preparing…"
+        if system == "rosout":
+            return COMING_SOON_DETAIL
+        return UNAVAILABLE_DETAIL
+
+    def system_states(
+        self, session, api_key_configured, embedding_ready, user_id=""
+    ):
+        """Per-participant, anonymized readiness for the three systems.
+
+        Entries are returned in fixed slot order (A, B, C); the real system
+        behind each slot is this participant's stable permutation. The real
+        ``id`` is kept for the client to send back, but the participant-facing
+        ``label`` and ``detail`` never name the pipeline.
+        """
+
         states = []
-        for system, entry in SYSTEMS.items():
-            state, detail, progress = self._system_state(
+        for slot, system in assign_slots(user_id):
+            entry = SYSTEMS[system]
+            state, _reason, progress = self._system_state(
                 system, session, api_key_configured, embedding_ready
             )
             states.append(
                 {
                     "id": system,
-                    "label": entry["label"],
-                    "description": entry["description"],
+                    "slot": slot,
+                    "label": "System {}".format(slot),
+                    "description": "",
                     "uses_audience": entry["uses_audience"],
                     "state": state,
                     "ready": state == "ready",
-                    "detail": detail,
+                    "actionable": state == "ready",
+                    "detail": self._participant_detail(system, state, _reason),
                     "progress": progress,
                 }
             )
         return states
 
     def system_state(self, system, session):
-        """Readiness for one system, resolved on demand."""
+        """Readiness for one system, resolved on demand (keyed by real id).
+
+        Used by the chat readiness check, which knows the real id. Readiness is
+        order-independent, so the anonymized slot fields are irrelevant here.
+        """
 
         for state in self.system_states(
             session, self.has_api_key(), self.embedding_ready()
@@ -1651,7 +1769,7 @@ class ChatApplication:
             "stored_exchange_count": self.store.count(session) if session else 0,
             "model": NVIDIA_MODEL,
             "systems": self.system_states(
-                session, api_key_configured, embedding_ready
+                session, api_key_configured, embedding_ready, user_id=user_id
             ),
             "default_system": DEFAULT_SYSTEM,
         }
@@ -1893,12 +2011,16 @@ class ChatRequestHandler(BaseHTTPRequestHandler):
         system_state = self.server.application.system_state(system, session)
         if system_state is None or not system_state["ready"]:
             detail = (system_state or {}).get("detail", "")
+            slot = dict(
+                (real, slot_letter)
+                for slot_letter, real in assign_slots(user_id)
+            ).get(system, "?")
             self._send_json(
                 409,
                 {
                     "error": (
-                        "{} is not ready to answer questions. {}".format(
-                            system_label(system), detail
+                        "System {} is not ready to answer questions. {}".format(
+                            slot, detail
                         ).strip()
                     ),
                     "system": system_state,
@@ -2127,6 +2249,15 @@ class ChatRequestHandler(BaseHTTPRequestHandler):
             )
             return
 
+        # Best-effort: the slot->system map is deterministic and recomputable,
+        # so a storage hiccup here must not block the participant from logging in.
+        try:
+            self.server.application.store.record_system_assignment(
+                session, user_id
+            )
+        except Exception as exc:
+            print("System assignment storage failed: {}".format(exc))
+
         next_index = progress["next_question_index"]
         self._send_json(
             200,
@@ -2259,11 +2390,7 @@ class ChatRequestHandler(BaseHTTPRequestHandler):
         if system != "rosout":
             self._send_json(
                 400,
-                {
-                    "error": "{} does not need preparation.".format(
-                        system_label(system)
-                    )
-                },
+                {"error": "This explanation system does not need preparation."},
             )
             return
 
