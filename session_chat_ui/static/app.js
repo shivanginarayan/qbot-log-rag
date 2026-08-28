@@ -36,14 +36,30 @@ const mapName = document.getElementById("mapName");
 const storedCount = document.getElementById("storedCount");
 const loggedInUserId = document.getElementById("loggedInUserId");
 const switchUserButton = document.getElementById("switchUserButton");
+const systemToggle = document.getElementById("systemToggle");
+const systemStatus = document.getElementById("systemStatus");
+const systemStatusText = document.getElementById("systemStatusText");
+const systemProgress = document.getElementById("systemProgress");
+const systemProgressBar = document.getElementById("systemProgressBar");
+const systemDescription = document.getElementById("systemDescription");
+
+const DEFAULT_SYSTEM = "proposed";
 
 let requestInProgress = false;
 let statusLoaded = false;
 let apiKeyConfigured = false;
 let apiKeyEntryAllowed = false;
 let displayedHistoryUserId = "";
+let displayedHistorySystem = "";
 let historyRequestNumber = 0;
 let activeDemographicQuestion = null;
+let activeSystem = DEFAULT_SYSTEM;
+let systemStates = new Map();
+let systemOrder = [];
+let switchingTo = "";
+let fastStatusTimer = null;
+let statusInFlight = false;
+let systemEpoch = 0;
 
 const emptyConversationMarkup = conversation.innerHTML;
 
@@ -160,10 +176,14 @@ async function enterChat() {
   setNotice("");
   resetConversation();
   displayedHistoryUserId = "";
-  await Promise.all([
-    loadChatHistory(userIdInput.value),
-    refreshStatus(),
-  ]);
+  displayedHistorySystem = "";
+  activeSystem = DEFAULT_SYSTEM;
+  switchingTo = "";
+
+  // Status first, so the system labels are known before history renders.
+  await refreshStatus();
+  await loadChatHistory(userIdInput.value, activeSystem);
+
   if (apiKeyConfigured) {
     questionInput.focus();
   } else if (apiKeyEntryAllowed) {
@@ -264,7 +284,7 @@ demographicsForm.addEventListener("submit", async (event) => {
 });
 
 switchUserButton.addEventListener("click", () => {
-  if (requestInProgress) {
+  if (requestInProgress || switchingTo) {
     setNotice("Wait for the current QBot response before switching users.");
     return;
   }
@@ -272,6 +292,8 @@ switchUserButton.addEventListener("click", () => {
   historyRequestNumber += 1;
   activeDemographicQuestion = null;
   displayedHistoryUserId = "";
+  displayedHistorySystem = "";
+  activeSystem = DEFAULT_SYSTEM;
   setCurrentUser("");
   resetConversation();
   loginUserIdInput.value = "";
@@ -284,6 +306,287 @@ switchUserButton.addEventListener("click", () => {
 function setNotice(message) {
   notice.textContent = message || "";
   notice.hidden = !message;
+}
+
+const systemButtons = new Map();
+
+function systemEntry(id) {
+  return systemStates.get(id) || null;
+}
+
+function systemLabel(id) {
+  const entry = systemEntry(id);
+  return entry ? entry.label : id;
+}
+
+function storeSystemState(entry) {
+  if (!entry || !entry.id) return;
+  systemStates.set(entry.id, entry);
+  if (!systemOrder.includes(entry.id)) systemOrder.push(entry.id);
+}
+
+function ensureSystemButton(id) {
+  let button = systemButtons.get(id);
+  if (button) return button;
+
+  button = document.createElement("button");
+  button.type = "button";
+  button.className = "system-option";
+  button.setAttribute("role", "radio");
+
+  const name = document.createElement("span");
+  name.className = "system-option-name";
+  button.appendChild(name);
+  button.addEventListener("click", () => {
+    selectSystem(id);
+  });
+
+  systemButtons.set(id, button);
+  systemToggle.appendChild(button);
+  return button;
+}
+
+function renderSystems() {
+  const busy = Boolean(switchingTo) || requestInProgress;
+  systemToggle.setAttribute("aria-busy", switchingTo ? "true" : "false");
+
+  systemOrder.forEach((id) => {
+    const entry = systemStates.get(id);
+    if (!entry) return;
+
+    const button = ensureSystemButton(id);
+    const isTarget = id === switchingTo;
+    const selectable = entry.state === "ready"
+      || entry.state === "needs_preparation"
+      || entry.state === "failed";
+    // While switching, only the incoming system is highlighted: the outgoing
+    // one is already put away.
+    const highlighted = switchingTo ? isTarget : id === activeSystem;
+
+    button.querySelector(".system-option-name").textContent = entry.label;
+    button.classList.toggle("selected", highlighted);
+    button.setAttribute("aria-checked", highlighted ? "true" : "false");
+    button.disabled = busy || !selectable;
+    button.title = entry.detail || entry.description || "";
+
+    const spinner = button.querySelector(".system-spinner");
+    if (isTarget || entry.state === "preparing") {
+      if (!spinner) {
+        const dot = document.createElement("span");
+        dot.className = "system-spinner";
+        dot.setAttribute("aria-hidden", "true");
+        button.appendChild(dot);
+      }
+    } else if (spinner) {
+      spinner.remove();
+    }
+  });
+
+  updateSystemStatusLine();
+}
+
+function systemHeadline(entry) {
+  if (entry.state === "failed") {
+    return `${entry.label} could not be prepared. Select it to try again.`;
+  }
+  return entry.detail || `${entry.label} is unavailable`;
+}
+
+function updateSystemStatusLine() {
+  const entry = systemEntry(switchingTo || activeSystem);
+
+  if (!entry) {
+    systemStatus.className = "system-status";
+    systemStatusText.textContent = "Checking systems…";
+    systemStatusText.title = "";
+    systemProgress.hidden = true;
+    systemDescription.textContent = "";
+    return;
+  }
+
+  const progress = entry.state === "preparing" ? entry.progress : null;
+  let tone = "";
+  let text = "";
+
+  if (entry.state === "preparing") {
+    text = progress && progress.total
+      ? `Building /rosout index — ${progress.done} / ${progress.total} logs`
+      : "Building /rosout index…";
+  } else if (switchingTo) {
+    text = `Starting ${entry.label}…`;
+  } else if (entry.state === "ready") {
+    tone = "ready";
+    text = `${entry.label} is ready`;
+  } else if (entry.state === "needs_preparation") {
+    text = entry.detail || "Select this system to prepare it";
+  } else {
+    tone = "error";
+    text = systemHeadline(entry);
+  }
+
+  systemStatus.className = `system-status${tone ? ` ${tone}` : ""}`;
+  systemStatusText.textContent = text;
+  systemStatusText.title = text;
+  systemDescription.textContent = entry.description || "";
+
+  if (progress && progress.total > 0) {
+    systemProgress.hidden = false;
+    systemProgressBar.style.width = `${Math.min(
+      100,
+      Math.round((progress.done / progress.total) * 100),
+    )}%`;
+  } else {
+    systemProgress.hidden = true;
+    systemProgressBar.style.width = "0%";
+  }
+}
+
+function updateComposerLock() {
+  const switching = Boolean(switchingTo);
+  const locked = switching || requestInProgress;
+  const entry = systemEntry(activeSystem);
+
+  sendButton.disabled = locked;
+  questionInput.disabled = switching;
+  switchUserButton.disabled = locked;
+  audienceInput.disabled = locked || (entry ? entry.uses_audience === false : false);
+}
+
+function updateFastStatusPolling() {
+  const preparing = systemOrder.some((id) => {
+    const entry = systemStates.get(id);
+    return Boolean(entry) && entry.state === "preparing";
+  });
+
+  if ((preparing || switchingTo) && fastStatusTimer === null) {
+    fastStatusTimer = setInterval(refreshStatus, 1500);
+  } else if (!preparing && !switchingTo && fastStatusTimer !== null) {
+    clearInterval(fastStatusTimer);
+    fastStatusTimer = null;
+  }
+}
+
+async function applySystem(id) {
+  activeSystem = id;
+  switchingTo = "";
+  updateComposerLock();
+  renderSystems();
+
+  displayedHistorySystem = "";
+  resetConversation();
+  await loadChatHistory(userIdInput.value, id);
+
+  if (!questionInput.disabled) questionInput.focus();
+}
+
+async function selectSystem(id) {
+  if (switchingTo) return;
+
+  if (requestInProgress) {
+    setNotice("Wait for the current QBot response before switching systems.");
+    return;
+  }
+
+  const entry = systemEntry(id);
+  if (!entry) return;
+
+  if (entry.state === "ready") {
+    if (id === activeSystem) return;
+    setNotice("");
+    await applySystem(id);
+    setNotice(`${entry.label} is ready.`);
+    return;
+  }
+
+  if (entry.state !== "needs_preparation" && entry.state !== "failed") {
+    setNotice(systemHeadline(entry));
+    return;
+  }
+
+  switchingTo = id;
+  systemEpoch += 1;
+  setNotice("");
+  updateComposerLock();
+  renderSystems();
+
+  try {
+    const response = await fetch("/api/system/prepare", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+      body: JSON.stringify({ system: id }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "That system could not be prepared.");
+    }
+
+    storeSystemState(data.system);
+    renderSystems();
+    updateFastStatusPolling();
+  } catch (error) {
+    switchingTo = "";
+    updateComposerLock();
+    renderSystems();
+    updateFastStatusPolling();
+    setNotice(error.message || "That system could not be prepared.");
+  }
+}
+
+function resolveSwitchProgress() {
+  if (!switchingTo) return;
+
+  const entry = systemEntry(switchingTo);
+  if (!entry || entry.state === "preparing") return;
+
+  if (entry.state === "ready") {
+    const target = switchingTo;
+    switchingTo = "";
+    applySystem(target).then(() => {
+      setNotice(`${entry.label} is ready to use.`);
+    });
+    return;
+  }
+
+  switchingTo = "";
+  updateComposerLock();
+  renderSystems();
+  setNotice(systemHeadline(entry));
+}
+
+function applySystemStates(systems, defaultSystem) {
+  if (!Array.isArray(systems)) return;
+
+  systemOrder = systems.map((item) => item.id);
+  systemStates = new Map(systems.map((item) => [item.id, item]));
+
+  if (!systemStates.has(activeSystem)) {
+    activeSystem = systemStates.has(defaultSystem)
+      ? defaultSystem
+      : systemOrder[0] || DEFAULT_SYSTEM;
+  }
+
+  renderSystems();
+  updateComposerLock();
+  resolveSwitchProgress();
+  updateFastStatusPolling();
+
+  const active = systemEntry(activeSystem);
+  const fallback = systemEntry(DEFAULT_SYSTEM);
+  if (
+    !switchingTo
+    && !requestInProgress
+    && active
+    && !active.ready
+    && activeSystem !== DEFAULT_SYSTEM
+    && fallback
+    && fallback.ready
+  ) {
+    const reason = active.detail || `${active.label} is no longer available.`;
+    applySystem(DEFAULT_SYSTEM).then(() => {
+      setNotice(`${reason} Switched back to ${fallback.label}.`);
+    });
+  }
 }
 
 function scrollToLatest() {
@@ -374,12 +677,14 @@ function formatSavedTime(value) {
   });
 }
 
-async function loadChatHistory(userId) {
+async function loadChatHistory(userId, system) {
   const cleanUserId = userId.trim();
+  const wantedSystem = system || activeSystem;
   const requestNumber = ++historyRequestNumber;
 
   if (!cleanUserId) {
     displayedHistoryUserId = "";
+    displayedHistorySystem = "";
     resetConversation();
     return false;
   }
@@ -389,7 +694,7 @@ async function loadChatHistory(userId) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       cache: "no-store",
-      body: JSON.stringify({ user_id: cleanUserId }),
+      body: JSON.stringify({ user_id: cleanUserId, system: wantedSystem }),
     });
     const data = await response.json();
 
@@ -400,6 +705,7 @@ async function loadChatHistory(userId) {
     if (
       requestNumber !== historyRequestNumber
       || userIdInput.value.trim() !== cleanUserId
+      || wantedSystem !== activeSystem
     ) {
       return false;
     }
@@ -410,12 +716,16 @@ async function loadChatHistory(userId) {
 
     conversation.replaceChildren();
 
+    const divider = document.createElement("div");
+    divider.className = "history-divider";
+    divider.textContent = interactions.length === 0
+      ? systemLabel(wantedSystem)
+      : `${systemLabel(wantedSystem)} · ${interactions.length} saved chat${interactions.length === 1 ? "" : "s"}`;
+
     if (interactions.length === 0) {
       resetConversation();
+      conversation.prepend(divider);
     } else {
-      const divider = document.createElement("div");
-      divider.className = "history-divider";
-      divider.textContent = `Saved history · ${interactions.length} chat${interactions.length === 1 ? "" : "s"}`;
       conversation.appendChild(divider);
 
       interactions.forEach((entry) => {
@@ -424,13 +734,14 @@ async function loadChatHistory(userId) {
         addMessage(
           entry.robot_response || "No saved response.",
           "assistant",
-          `QBot assistant · ${savedTime} · saved`,
+          `${systemLabel(entry.system || wantedSystem)} · ${savedTime} · saved`,
           entry.status === "error",
         );
       });
     }
 
     displayedHistoryUserId = cleanUserId;
+    displayedHistorySystem = wantedSystem;
     scrollToLatest();
     return true;
   } catch (error) {
@@ -442,6 +753,10 @@ async function loadChatHistory(userId) {
 }
 
 async function refreshStatus() {
+  if (statusInFlight) return;
+  statusInFlight = true;
+  const epoch = systemEpoch;
+
   try {
     const currentUserId = userIdInput.value.trim();
     const response = await fetch("/api/status", {
@@ -495,10 +810,17 @@ async function refreshStatus() {
       apiKeyState.textContent = "Enter at localhost:8766 on the QBot";
       apiKeyButton.textContent = "Local only";
     }
+
+    // Discard system states requested before the latest prepare call.
+    if (epoch === systemEpoch) {
+      applySystemStates(data.systems, data.default_system);
+    }
   } catch (error) {
     statusLoaded = false;
     pipelineBadge.className = "pipeline-badge error";
     pipelineText.textContent = "UI server unavailable";
+  } finally {
+    statusInFlight = false;
   }
 }
 
@@ -589,6 +911,11 @@ chatForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (requestInProgress) return;
 
+  if (switchingTo) {
+    setNotice(`${systemLabel(switchingTo)} is still starting up.`);
+    return;
+  }
+
   const userId = userIdInput.value.trim();
   const question = questionInput.value.trim();
 
@@ -615,8 +942,20 @@ chatForm.addEventListener("submit", async (event) => {
     return;
   }
 
-  if (displayedHistoryUserId !== userId) {
-    await loadChatHistory(userId);
+  const activeEntry = systemEntry(activeSystem);
+  if (statusLoaded && activeEntry && !activeEntry.ready) {
+    setNotice(
+      activeEntry.detail
+        || `${activeEntry.label} is not ready to answer questions.`,
+    );
+    return;
+  }
+
+  if (
+    displayedHistoryUserId !== userId
+    || displayedHistorySystem !== activeSystem
+  ) {
+    await loadChatHistory(userId, activeSystem);
   }
 
   setNotice("");
@@ -629,10 +968,10 @@ chatForm.addEventListener("submit", async (event) => {
   resizeQuestion();
 
   const thinking = addThinkingMessage();
+  const askedSystem = activeSystem;
   requestInProgress = true;
-  sendButton.disabled = true;
-  switchUserButton.disabled = true;
-  audienceInput.disabled = true;
+  updateComposerLock();
+  renderSystems();
 
   try {
     const response = await fetch("/api/chat", {
@@ -642,6 +981,7 @@ chatForm.addEventListener("submit", async (event) => {
         user_id: userId,
         question,
         audience: audienceInput.value,
+        system: askedSystem,
       }),
     });
 
@@ -654,9 +994,10 @@ chatForm.addEventListener("submit", async (event) => {
 
     thinking.remove();
     const responseText = data.answer || data.error || "No answer was returned.";
+    const answeringSystem = systemLabel(data.system || askedSystem);
     const meta = response.ok
-      ? `QBot assistant · ${Math.max(0, Math.round((data.response_time_ms || 0) / 100) / 10)}s · saved`
-      : "QBot assistant · request error";
+      ? `${answeringSystem} · ${Math.max(0, Math.round((data.response_time_ms || 0) / 100) / 10)}s · saved`
+      : `${answeringSystem} · request error`;
     addMessage(responseText, "assistant", meta, !response.ok);
 
     if (data.error && data.answer && data.error !== data.answer) {
@@ -672,9 +1013,8 @@ chatForm.addEventListener("submit", async (event) => {
     );
   } finally {
     requestInProgress = false;
-    sendButton.disabled = false;
-    switchUserButton.disabled = false;
-    audienceInput.disabled = false;
+    updateComposerLock();
+    renderSystems();
     questionInput.focus();
     refreshStatus();
   }

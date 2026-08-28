@@ -124,6 +124,24 @@
         </div>
 
         <div class="sidebar-section">
+          <p class="section-label">Explanation system</p>
+          <div
+            id="systemToggle"
+            class="system-toggle"
+            role="radiogroup"
+            aria-label="Explanation system"
+          ></div>
+          <div id="systemStatus" class="system-status">
+            <span class="status-light"></span>
+            <span id="systemStatusText">Checking systems…</span>
+          </div>
+          <div id="systemProgress" class="system-progress" hidden>
+            <div id="systemProgressBar" class="system-progress-bar"></div>
+          </div>
+          <p id="systemDescription" class="system-description"></p>
+        </div>
+
+        <div class="sidebar-section">
           <p class="section-label">Your details</p>
           <input id="userId" type="hidden">
           <div class="current-user-card">
