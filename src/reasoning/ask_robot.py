@@ -432,18 +432,83 @@ def normalize(vector):
 
 
 def embed(text):
+    """
+    Embed a question using the local BGE-M3 Ollama model.
+
+    Prefer the newer /api/embed endpoint, but fall back to the
+    older /api/embeddings endpoint used by this QBot installation.
+    """
+
+    # --------------------------------------------------------
+    # Newer Ollama endpoint
+    # --------------------------------------------------------
+
+    try:
+        payload = json.dumps(
+            {
+                "model":
+                    MODEL_EMBED,
+
+                "input":
+                    text,
+            }
+        ).encode("utf-8")
+
+        request = urllib.request.Request(
+            "http://localhost:11434/api/embed",
+            data=payload,
+            headers={
+                "Content-Type":
+                    "application/json"
+            },
+            method="POST",
+        )
+
+        with urllib.request.urlopen(
+            request,
+            timeout=120,
+        ) as response:
+
+            data = json.loads(
+                response
+                .read()
+                .decode("utf-8")
+            )
+
+        embeddings = data.get(
+            "embeddings"
+        )
+
+        if (
+            isinstance(
+                embeddings,
+                list,
+            )
+            and embeddings
+        ):
+            return normalize(
+                embeddings[0]
+            )
+
+    except Exception:
+        pass
+
+    # --------------------------------------------------------
+    # Older Ollama endpoint
+    # --------------------------------------------------------
+
     payload = json.dumps(
         {
             "model":
                 MODEL_EMBED,
 
-            "input":
+            "prompt":
                 text,
         }
     ).encode("utf-8")
 
     request = urllib.request.Request(
-        "http://localhost:11434/api/embed",
+        "http://localhost:11434/api/embeddings",
         data=payload,
         headers={
             "Content-Type":
@@ -463,8 +528,17 @@ def embed(text):
             .decode("utf-8")
         )
 
+    embedding = data.get(
+        "embedding"
+    )
+
+    if not embedding:
+        raise RuntimeError(
+            "Ollama returned no embedding."
+        )
+
     return normalize(
-        data["embeddings"][0]
+        embedding
     )
 
 
@@ -2164,11 +2238,22 @@ def main():
             load_saved_maps_metadata()
         )
 
-        referenced_maps_metadata = (
-            load_referenced_maps_metadata(
-                question
-            )
+    # --------------------------------------------------------
+    # Explicitly named saved maps are independent of whether
+    # the question asks for the overall saved-map inventory.
+    #
+    # Example:
+    # "How many labels are on map1234?"
+    #
+    # This should load map1234 metadata even though the user
+    # did not ask "what maps are saved?"
+    # --------------------------------------------------------
+
+    referenced_maps_metadata = (
+        load_referenced_maps_metadata(
+            question
         )
+    )
 
 
     # ========================================================

@@ -30,6 +30,10 @@ from explaining_autonomy.rosout_reader import (
     read_rosout_records,
 )
 
+from explaining_autonomy.persistent_memory import (
+    upsert_records,
+)
+
 
 def index_path_for_session(
     session_id,
@@ -59,6 +63,15 @@ def main():
     parser.add_argument(
         "--session-id",
         default="latest",
+    )
+
+    parser.add_argument(
+        "--no-persistent-memory",
+        action="store_true",
+        help=(
+            "Build only the per-session index and do not "
+            "add this session to cumulative /rosout memory."
+        ),
     )
 
     args = parser.parse_args()
@@ -171,6 +184,9 @@ def main():
                 "record_id":
                     i,
 
+                "session_id":
+                    session_id,
+
                 **record,
 
                 "embedding":
@@ -240,6 +256,37 @@ def main():
         "Indexed records:",
         len(indexed),
     )
+
+    if not args.no_persistent_memory:
+        stats = upsert_records(
+            indexed
+        )
+
+        print()
+        print(
+            "PERSISTENT /ROSOUT MEMORY"
+        )
+
+        print(
+            "Added:",
+            stats[
+                "added"
+            ],
+        )
+
+        print(
+            "Total records:",
+            stats[
+                "total"
+            ],
+        )
+
+        print(
+            "Sessions:",
+            stats[
+                "session_count"
+            ],
+        )
 
 
 if __name__ == "__main__":

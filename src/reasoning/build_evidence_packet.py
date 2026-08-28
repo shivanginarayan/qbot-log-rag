@@ -85,7 +85,10 @@ def fetch_window(
                 SELECT *
                 FROM {table}
                 WHERE started_at_ns <= ?
-                  AND ended_at_ns >= ?
+                  AND (
+                        ended_at_ns >= ?
+                        OR ended_at_ns IS NULL
+                  )
                 ORDER BY started_at_ns
             """
             return conn.execute(

@@ -60,3 +60,8 @@ runtime_logs/behavior_embeddings.json
 
 # Robot-generated map files
 robot_navigation/maps/*
+
+# Explaining Autonomy runtime/generated memory
+comparison_experiments/runtime/explaining_autonomy/live_rosout_embeddings.json
+comparison_experiments/runtime/explaining_autonomy/live_rosout_embeddings.json.tmp
+comparison_experiments/runtime/explaining_autonomy/persistent_rosout_memory.json
