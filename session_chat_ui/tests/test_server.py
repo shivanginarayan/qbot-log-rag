@@ -602,9 +602,87 @@ class RagRunnerTest(unittest.TestCase):
         )
         observed_environment = {}
 
-        def complete_command(*_args, **kwargs):
-            observed_environment.update(kwargs["env"])
-            return completed
+    def test_rosout_baseline_does_not_receive_session_id(self):
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=(
+                server.ANSWER_MARKER
+                + "Explaining autonomy answer\n"
+            ),
+            stderr="",
+        )
+
+        runner = server.RagRunner()
+
+        with mock.patch.object(
+            server.subprocess,
+            "run",
+            return_value=completed,
+        ) as run_command:
+            runner.answer(
+                "What is happening?",
+                "20260824_abc1",
+                "user",
+                "nvapi-test-key",
+                system="rosout",
+            )
+
+        command = run_command.call_args.args[0]
+
+        self.assertIn("rosout", command)
+        self.assertIn("--question", command)
+        self.assertIn("What is happening?", command)
+
+        self.assertNotIn("--session-id", command)
+        self.assertNotIn("20260824_abc1", command)
+
+
+def test_causal_baseline_does_not_receive_session_id(self):
+    completed = subprocess.CompletedProcess(
+        args=[],
+        returncode=0,
+        stdout=(
+            server.ANSWER_MARKER
+            + "Causal explanation answer\n"
+        ),
+        stderr="",
+    )
+
+    runner = server.RagRunner()
+
+    with mock.patch.object(
+        server.subprocess,
+        "run",
+        return_value=completed,
+    ) as run_command:
+        runner.answer(
+            "Why did localization succeed?",
+            "20260824_abc1",
+            "developer",
+            "nvapi-test-key",
+            system="causal",
+        )
+
+    command = run_command.call_args.args[0]
+
+    self.assertIn("causal", command)
+    self.assertIn("--question", command)
+    self.assertIn(
+        "Why did localization succeed?",
+        command,
+    )
+
+    self.assertIn("--role", command)
+    self.assertIn("engineer", command)
+
+    self.assertNotIn("--session-id", command)
+    self.assertNotIn("20260824_abc1", command)
+
+
+    def complete_command(*_args, **kwargs):
+        observed_environment.update(kwargs["env"])
+        return completed
 
         with tempfile.TemporaryDirectory() as directory:
             script = Path(directory) / "ask_robot.py"

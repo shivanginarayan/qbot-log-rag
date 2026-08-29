@@ -1096,8 +1096,6 @@ class RagRunner:
                 "bash",
                 str(COMPARISON_SCRIPT),
                 "rosout",
-                "--session-id",
-                session_id,
                 "--question",
                 question,
             ]
@@ -1107,8 +1105,6 @@ class RagRunner:
                 "bash",
                 str(COMPARISON_SCRIPT),
                 "causal",
-                "--session-id",
-                session_id,
                 "--role",
                 "engineer" if audience == "developer" else "user",
                 "--question",
