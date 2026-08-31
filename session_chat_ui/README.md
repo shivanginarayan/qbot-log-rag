@@ -131,7 +131,26 @@ sqlite3 runtime_logs/session_SESSION_ID/robot.db \
   "SELECT user_id, question_text, response_value FROM ui_demographic_responses ORDER BY user_id, question_index;"
 ```
 
-The UI does not provide a public database download route.
+The UI does not provide a database download route. Developers must export from
+the QBot terminal only. This command reads all session databases and writes a
+private workbook outside the repository:
+
+```bash
+python3 src/export_database_to_excel.py
+```
+
+The default output is `~/qbot_exports/qbot_database_export_TIMESTAMP.xlsx`.
+The output directory is created with owner-only permissions and the workbook
+is owner-readable only. To choose a different private destination:
+
+```bash
+python3 src/export_database_to_excel.py \
+  --output ~/qbot_exports/my_qbot_data.xlsx
+```
+
+The script uses read-only SQLite connections, discovers every table and column
+in every `runtime_logs/session_*/robot.db`, and includes the source session ID
+on each worksheet row. It never adds data to the UI, browser, Git, or GitHub.
 
 ## Options
 

@@ -63,7 +63,7 @@ The same `session_id` ties raw and structured evidence together.
 ## 4. ROS / navigation context
 
 - ROS2 Humble
-- `ROS_DOMAIN_ID=57`
+- `ROS_DOMAIN_ID=39`
 - Map: `home_test_v1`
 - Map YAML: `robot_navigation/maps/home_test_v1/home_test_v1.yaml`
 - Nav2 consumes `/scan_filtered`

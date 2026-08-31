@@ -3,7 +3,7 @@ from session_manager import SessionManager
 
 manager = SessionManager(
     base_log_dir="runtime_logs",
-    ros_domain_id=57,
+    ROS_DOMAIN_ID=39,
     map_name="home_test_v1",
     map_yaml_path=(
         "robot_navigation/maps/"

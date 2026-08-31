@@ -90,7 +90,7 @@ fi
 
 QBOT_INHERITED_DOMAIN="${ROS_DOMAIN_ID:-}"
 
-export ROS_DOMAIN_ID=57
+export ROS_DOMAIN_ID=39
 
 
 echo
@@ -111,7 +111,7 @@ then
     echo "      the experiment forces 57."
     echo
     echo "      To compare against a standalone run, use:"
-    echo "        ROS_DOMAIN_ID=57 ./run_qbot_map_labeler.sh"
+    echo "        ROS_DOMAIN_ID=39 ./run_qbot_map_labeler.sh"
 
 fi
 
@@ -534,7 +534,7 @@ cleanup_stale_experiment() {
     # This does NOT stop ROS nodes.
     # --------------------------------------------------------
 
-    ROS_DOMAIN_ID=57 \
+    ROS_DOMAIN_ID=39 \
         ros2 daemon stop \
         >/dev/null 2>&1 || true
 
@@ -542,7 +542,7 @@ cleanup_stale_experiment() {
     sleep 1
 
 
-    ROS_DOMAIN_ID=57 \
+    ROS_DOMAIN_ID=39 \
         ros2 daemon start \
         >/dev/null 2>&1 || true
 
@@ -1193,7 +1193,7 @@ cleanup_processes() {
     echo "Refreshing ROS 2 daemon..."
 
 
-    ROS_DOMAIN_ID=57 \
+    ROS_DOMAIN_ID=39 \
         ros2 daemon stop \
         >/dev/null 2>&1 || true
 
@@ -1201,7 +1201,7 @@ cleanup_processes() {
     sleep 1
 
 
-    ROS_DOMAIN_ID=57 \
+    ROS_DOMAIN_ID=39 \
         ros2 daemon start \
         >/dev/null 2>&1 || true
 
