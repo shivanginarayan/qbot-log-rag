@@ -1218,8 +1218,13 @@ class NavigationManager:
         "/navigation_joystick",
         "/planner_server",
     }
-    HEALTH_FAILURE_LIMIT = 2
+    HEALTH_FAILURE_LIMIT = 3
     GRAPH_CLEAN_SCAN_COUNT = 2
+    # Every graph probe spawns a `ros2` CLI process, and on this Jetson a
+    # `ros2 node list` against the ~45-node experiment graph measures 2-3 s
+    # idle and 4.5-8 s while the loggers, rosbag, and chat UI are running.
+    # A 5 s budget therefore expired on a perfectly healthy stack.
+    CLI_TIMEOUT = 25.0
 
     def __init__(
         self,
@@ -1231,7 +1236,7 @@ class NavigationManager:
         scan_filter_file: Path = SCAN_FILTER_FILE,
         ros_domain_id: int = 63,
         adaptive_goal_tolerance: bool = True,
-        readiness_timeout: float = 120.0,
+        readiness_timeout: float = 300.0,
         probe_interval: float = 1.0,
         coordinator: RobotOperationCoordinator | None = None,
         popen_factory=None,
@@ -1407,7 +1412,7 @@ class NavigationManager:
                 check=False,
                 capture_output=True,
                 text=True,
-                timeout=5.0,
+                timeout=self.CLI_TIMEOUT,
                 env=self._environment(),
             )
         except FileNotFoundError as exc:
@@ -1809,8 +1814,12 @@ class NavigationManager:
                     )
                 missing = self.missing_critical_nodes()
                 if missing is None:
-                    health_failures += 1
-                    last_health_problem = "the ROS graph could not be inspected"
+                    # A probe that times out says the ros2 CLI could not answer
+                    # in time, not that Nav2 died; the process.poll() above is
+                    # what detects a stack that actually went away. Leave the
+                    # counter untouched so a slow graph neither tears down a
+                    # running stack nor clears a real missing-node streak.
+                    pass
                 elif missing:
                     health_failures += 1
                     last_health_problem = "missing critical nodes: " + ", ".join(missing)
@@ -2058,6 +2067,7 @@ class MappingManager:
         "/QBotPlatformDriver",
     }
     GRAPH_CLEAN_SCAN_COUNT = NavigationManager.GRAPH_CLEAN_SCAN_COUNT
+    CLI_TIMEOUT = NavigationManager.CLI_TIMEOUT
 
     def __init__(
         self,
@@ -2071,7 +2081,7 @@ class MappingManager:
         rebuild_script: Path = REBUILD_NAVIGATION_SCRIPT,
         scan_filter_file: Path = SCAN_FILTER_FILE,
         ros_domain_id: int = 63,
-        readiness_timeout: float = 120.0,
+        readiness_timeout: float = 300.0,
         save_timeout: float = 30.0,
         probe_interval: float = 1.0,
         mapping_label_topic: str = "/mapping/drop_label",
@@ -2276,7 +2286,7 @@ class MappingManager:
                 check=False,
                 capture_output=True,
                 text=True,
-                timeout=5.0,
+                timeout=self.CLI_TIMEOUT,
                 env=self._environment(),
             )
         except FileNotFoundError as exc:
@@ -4269,13 +4279,13 @@ def main() -> None:
     parser.add_argument(
         "--navigation-timeout",
         type=float,
-        default=120,
+        default=300,
         help="Seconds to wait for AMCL and Nav2 to become ready",
     )
     parser.add_argument(
         "--mapping-timeout",
         type=float,
-        default=120,
+        default=300,
         help="Seconds to wait for Cartographer and its live map to become ready",
     )
     parser.add_argument(
