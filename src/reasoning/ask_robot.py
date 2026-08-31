@@ -20,6 +20,10 @@ try:
         plan_and_query_events,
     )
 
+    from .live_spatial_context import (
+        build_live_spatial_context,
+    )
+
 except ImportError:
     from build_evidence_packet import (
         build_packet,
@@ -28,6 +32,10 @@ except ImportError:
 
     from generic_event_query import (
         plan_and_query_events,
+    )
+
+    from live_spatial_context import (
+        build_live_spatial_context,
     )
 
 
@@ -1139,6 +1147,18 @@ def asks_about_current_pose(
         "current position",
         "current pose",
         "where are you now",
+
+        "coordinates",
+        "coordinate",
+
+        "closest label",
+        "nearest label",
+
+        "closest location",
+        "nearest location",
+
+        "what am i near",
+        "what are you near",
     ]
 
     return any(
@@ -1677,6 +1697,57 @@ GROUNDING RULES:
 
     Do not substitute current-map information or historical
     behavior memory for explicitly named map metadata.
+
+59. live_spatial_context.current_pose is the current AMCL
+    map-frame pose reported by the same live pose monitor
+    used by the browser UI.
+
+    If current_pose.available is true, you may report its
+    world x/y coordinates and yaw.
+
+    If current_pose.stale is true, explicitly say the
+    current pose is stale.
+
+60. live_spatial_context.nearest_label is computed from
+    the current AMCL pose and saved label world coordinates
+    on the current map.
+
+    distance_m is straight-line Euclidean map-frame distance.
+
+    Do not describe it as Nav2 path distance, travel
+    distance, or proof that the label is reachable.
+
+61. For current-position or nearest-label questions,
+    prefer live_spatial_context over historical semantic
+    memory.
+
+62. Wheel odometry and AMCL pose are different evidence
+    sources.
+
+    For current map position, prefer the current AMCL
+    map-frame pose when it is available.
+
+63. The ROS-graph field amcl_present and the live AMCL pose are
+    separate evidence.
+
+    amcl_present=false means that the AMCL node was not observed
+    during that particular ROS-graph inspection. It does not by
+    itself invalidate a current pose supplied by
+    live_spatial_context.current_pose.
+
+    If live_spatial_context.current_pose.available=true and the
+    pose is not stale, report that pose as the current AMCL
+    map-frame position even if amcl_present=false.
+
+64. The presence of an AMCL pose does not mean that a localization
+    task is currently executing.
+
+    State that localization is "in progress" only when task/runtime
+    evidence explicitly records an active localization lifecycle or
+    localization operation.
+
+    Otherwise describe the AMCL pose simply as the robot's current
+    localization estimate.
 
 Answer the user's question directly.
 """.strip()
@@ -2225,6 +2296,38 @@ def main():
                 )
             )
 
+        # ========================================================
+        # LIVE SPATIAL CONTEXT
+        # ========================================================
+
+        live_spatial_context = None
+
+        if (
+            args.session_id is not None
+            and current_map_metadata is not None
+        ):
+            try:
+
+                live_spatial_context = (
+                    build_live_spatial_context(
+                        current_map_metadata
+                    )
+                )
+
+            except Exception as exc:
+
+                live_spatial_context = {
+                    "source_type":
+                        "live_spatial_context",
+
+                    "current_pose": {
+                        "available":
+                            False,
+
+                        "error":
+                            str(exc),
+                    },
+                }
 
     # --------------------------------------------------------
     # Saved-map inventory is independent of the live session.
@@ -2505,6 +2608,10 @@ def main():
     if live_packet is not None:
         packets.append(
             live_packet
+        )
+    if live_spatial_context is not None:
+        packets.append(
+            live_spatial_context
         )
 
 
@@ -2907,6 +3014,50 @@ def main():
                 occurrence.get(
                     "indexed_outcome"
                 ),
+            )
+        elif packet.get("source_type") == "live_spatial_context":
+
+            pose = packet.get("current_pose",{},)
+
+            nearest = packet.get("nearest_label")
+
+            world = pose.get("world") or {}
+
+            print(
+                "- LIVE SPATIAL",
+                {
+                    "map":
+                        packet.get("current_map"),
+
+                    "pose_available":
+                        pose.get("available"),
+
+                    "x":
+                        world.get("x"),
+
+                    "y":
+                        world.get("y"),
+
+                    "yaw":
+                        pose.get("yaw"),
+
+                    "stale":
+                        pose.get("stale"),
+
+                    "nearest_label":
+                        (
+                            nearest.get("name")
+                            if nearest
+                            else None
+                        ),
+
+                    "nearest_distance_m":
+                        (
+                            nearest.get("distance_m")
+                            if nearest
+                            else None
+                        ),
+                },
             )
 
         else:

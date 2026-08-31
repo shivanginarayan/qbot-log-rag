@@ -1,0 +1,516 @@
+{
+  "system": "adapted_personalized_causal_explanation",
+  "occurrences": [
+    {
+      "run_id": "causal_20260829_022922",
+      "timestamp_ns": 1787970610986047232,
+      "event_name": "map_transform_unavailable",
+      "event_label": "map transform was unavailable",
+      "cause": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "effect": "a component could not transform robot data into the map frame",
+      "source": "/rosout",
+      "map": null,
+      "label": null,
+      "status": null,
+      "raw_message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "evidence_payload": {
+        "message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+        "node": "global_costmap.global_costmap"
+      },
+      "causal_occurrence_id": "cause_1_1787970610986047232"
+    },
+    {
+      "run_id": "causal_20260829_022922",
+      "timestamp_ns": 1787970612986154462,
+      "event_name": "map_transform_unavailable",
+      "event_label": "map transform was unavailable",
+      "cause": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "effect": "a component could not transform robot data into the map frame",
+      "source": "/rosout",
+      "map": null,
+      "label": null,
+      "status": null,
+      "raw_message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "evidence_payload": {
+        "message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+        "node": "global_costmap.global_costmap"
+      },
+      "causal_occurrence_id": "cause_2_1787970612986154462"
+    },
+    {
+      "run_id": "causal_20260829_022922",
+      "timestamp_ns": 1787970615486109149,
+      "event_name": "map_transform_unavailable",
+      "event_label": "map transform was unavailable",
+      "cause": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "effect": "a component could not transform robot data into the map frame",
+      "source": "/rosout",
+      "map": null,
+      "label": null,
+      "status": null,
+      "raw_message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "evidence_payload": {
+        "message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+        "node": "global_costmap.global_costmap"
+      },
+      "causal_occurrence_id": "cause_3_1787970615486109149"
+    },
+    {
+      "run_id": "causal_20260829_022922",
+      "timestamp_ns": 1787970617986115581,
+      "event_name": "map_transform_unavailable",
+      "event_label": "map transform was unavailable",
+      "cause": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "effect": "a component could not transform robot data into the map frame",
+      "source": "/rosout",
+      "map": null,
+      "label": null,
+      "status": null,
+      "raw_message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "evidence_payload": {
+        "message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+        "node": "global_costmap.global_costmap"
+      },
+      "causal_occurrence_id": "cause_4_1787970617986115581"
+    },
+    {
+      "run_id": "causal_20260829_022922",
+      "timestamp_ns": 1787970619986126169,
+      "event_name": "map_transform_unavailable",
+      "event_label": "map transform was unavailable",
+      "cause": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "effect": "a component could not transform robot data into the map frame",
+      "source": "/rosout",
+      "map": null,
+      "label": null,
+      "status": null,
+      "raw_message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "evidence_payload": {
+        "message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+        "node": "global_costmap.global_costmap"
+      },
+      "causal_occurrence_id": "cause_5_1787970619986126169"
+    },
+    {
+      "run_id": "causal_20260829_022922",
+      "timestamp_ns": 1787970622486112911,
+      "event_name": "map_transform_unavailable",
+      "event_label": "map transform was unavailable",
+      "cause": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "effect": "a component could not transform robot data into the map frame",
+      "source": "/rosout",
+      "map": null,
+      "label": null,
+      "status": null,
+      "raw_message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "evidence_payload": {
+        "message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+        "node": "global_costmap.global_costmap"
+      },
+      "causal_occurrence_id": "cause_6_1787970622486112911"
+    },
+    {
+      "run_id": "causal_20260829_022922",
+      "timestamp_ns": 1787970624986118404,
+      "event_name": "map_transform_unavailable",
+      "event_label": "map transform was unavailable",
+      "cause": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "effect": "a component could not transform robot data into the map frame",
+      "source": "/rosout",
+      "map": null,
+      "label": null,
+      "status": null,
+      "raw_message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "evidence_payload": {
+        "message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+        "node": "global_costmap.global_costmap"
+      },
+      "causal_occurrence_id": "cause_7_1787970624986118404"
+    },
+    {
+      "run_id": "causal_20260829_022922",
+      "timestamp_ns": 1787970627486114111,
+      "event_name": "map_transform_unavailable",
+      "event_label": "map transform was unavailable",
+      "cause": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "effect": "a component could not transform robot data into the map frame",
+      "source": "/rosout",
+      "map": null,
+      "label": null,
+      "status": null,
+      "raw_message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "evidence_payload": {
+        "message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+        "node": "global_costmap.global_costmap"
+      },
+      "causal_occurrence_id": "cause_8_1787970627486114111"
+    },
+    {
+      "run_id": "causal_20260829_022922",
+      "timestamp_ns": 1787970629986114936,
+      "event_name": "map_transform_unavailable",
+      "event_label": "map transform was unavailable",
+      "cause": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "effect": "a component could not transform robot data into the map frame",
+      "source": "/rosout",
+      "map": null,
+      "label": null,
+      "status": null,
+      "raw_message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "evidence_payload": {
+        "message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+        "node": "global_costmap.global_costmap"
+      },
+      "causal_occurrence_id": "cause_9_1787970629986114936"
+    },
+    {
+      "run_id": "causal_20260829_022922",
+      "timestamp_ns": 1787970632486114870,
+      "event_name": "map_transform_unavailable",
+      "event_label": "map transform was unavailable",
+      "cause": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "effect": "a component could not transform robot data into the map frame",
+      "source": "/rosout",
+      "map": null,
+      "label": null,
+      "status": null,
+      "raw_message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "evidence_payload": {
+        "message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+        "node": "global_costmap.global_costmap"
+      },
+      "causal_occurrence_id": "cause_10_1787970632486114870"
+    },
+    {
+      "run_id": "causal_20260829_022922",
+      "timestamp_ns": 1787970634486225082,
+      "event_name": "map_transform_unavailable",
+      "event_label": "map transform was unavailable",
+      "cause": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "effect": "a component could not transform robot data into the map frame",
+      "source": "/rosout",
+      "map": null,
+      "label": null,
+      "status": null,
+      "raw_message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "evidence_payload": {
+        "message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+        "node": "global_costmap.global_costmap"
+      },
+      "causal_occurrence_id": "cause_11_1787970634486225082"
+    },
+    {
+      "run_id": "causal_20260829_022922",
+      "timestamp_ns": 1787970636986113312,
+      "event_name": "map_transform_unavailable",
+      "event_label": "map transform was unavailable",
+      "cause": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "effect": "a component could not transform robot data into the map frame",
+      "source": "/rosout",
+      "map": null,
+      "label": null,
+      "status": null,
+      "raw_message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "evidence_payload": {
+        "message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+        "node": "global_costmap.global_costmap"
+      },
+      "causal_occurrence_id": "cause_12_1787970636986113312"
+    },
+    {
+      "run_id": "causal_20260829_022922",
+      "timestamp_ns": 1787970638986332656,
+      "event_name": "map_transform_unavailable",
+      "event_label": "map transform was unavailable",
+      "cause": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "effect": "a component could not transform robot data into the map frame",
+      "source": "/rosout",
+      "map": null,
+      "label": null,
+      "status": null,
+      "raw_message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "evidence_payload": {
+        "message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+        "node": "global_costmap.global_costmap"
+      },
+      "causal_occurrence_id": "cause_13_1787970638986332656"
+    },
+    {
+      "run_id": "causal_20260829_022922",
+      "timestamp_ns": 1787970641486105572,
+      "event_name": "map_transform_unavailable",
+      "event_label": "map transform was unavailable",
+      "cause": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "effect": "a component could not transform robot data into the map frame",
+      "source": "/rosout",
+      "map": null,
+      "label": null,
+      "status": null,
+      "raw_message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "evidence_payload": {
+        "message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+        "node": "global_costmap.global_costmap"
+      },
+      "causal_occurrence_id": "cause_14_1787970641486105572"
+    },
+    {
+      "run_id": "causal_20260829_022922",
+      "timestamp_ns": 1787970643486107290,
+      "event_name": "map_transform_unavailable",
+      "event_label": "map transform was unavailable",
+      "cause": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "effect": "a component could not transform robot data into the map frame",
+      "source": "/rosout",
+      "map": null,
+      "label": null,
+      "status": null,
+      "raw_message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "evidence_payload": {
+        "message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+        "node": "global_costmap.global_costmap"
+      },
+      "causal_occurrence_id": "cause_15_1787970643486107290"
+    },
+    {
+      "run_id": "causal_20260829_022922",
+      "timestamp_ns": 1787970645986115865,
+      "event_name": "map_transform_unavailable",
+      "event_label": "map transform was unavailable",
+      "cause": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "effect": "a component could not transform robot data into the map frame",
+      "source": "/rosout",
+      "map": null,
+      "label": null,
+      "status": null,
+      "raw_message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "evidence_payload": {
+        "message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+        "node": "global_costmap.global_costmap"
+      },
+      "causal_occurrence_id": "cause_16_1787970645986115865"
+    },
+    {
+      "run_id": "causal_20260829_022922",
+      "timestamp_ns": 1787970648486110073,
+      "event_name": "map_transform_unavailable",
+      "event_label": "map transform was unavailable",
+      "cause": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "effect": "a component could not transform robot data into the map frame",
+      "source": "/rosout",
+      "map": null,
+      "label": null,
+      "status": null,
+      "raw_message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "evidence_payload": {
+        "message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+        "node": "global_costmap.global_costmap"
+      },
+      "causal_occurrence_id": "cause_17_1787970648486110073"
+    },
+    {
+      "run_id": "causal_20260829_022922",
+      "timestamp_ns": 1787970650986102003,
+      "event_name": "map_transform_unavailable",
+      "event_label": "map transform was unavailable",
+      "cause": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "effect": "a component could not transform robot data into the map frame",
+      "source": "/rosout",
+      "map": null,
+      "label": null,
+      "status": null,
+      "raw_message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+      "evidence_payload": {
+        "message": "Timed out waiting for transform from base_link to map to become available, tf error: Invalid frame ID \"map\" passed to canTransform argument target_frame - frame does not exist",
+        "node": "global_costmap.global_costmap"
+      },
+      "causal_occurrence_id": "cause_18_1787970650986102003"
+    },
+    {
+      "run_id": "causal_20260829_022922",
+      "timestamp_ns": 1787970652538037507,
+      "event_name": "localization_started",
+      "event_label": "localization started",
+      "cause": "a localization execution-start event was reported",
+      "effect": "the robot started localization",
+      "source": "/robot/navigation_status",
+      "map": "map1234",
+      "label": "localize (AMCL global localization)",
+      "status": 2,
+      "raw_message": null,
+      "evidence_payload": {
+        "event": "started",
+        "label": "localize (AMCL global localization)",
+        "name": "localize",
+        "label_id": null,
+        "kind": "navigation",
+        "detail": "AMCL global localization",
+        "world": null,
+        "yaw": null,
+        "map": "map1234",
+        "status": 2,
+        "localizer": "amcl",
+        "manual_state": "locked"
+      },
+      "causal_occurrence_id": "cause_19_1787970652538037507"
+    },
+    {
+      "run_id": "causal_20260829_022922",
+      "timestamp_ns": 1787970652986242057,
+      "event_name": "map_transform_unavailable",
+      "event_label": "map transform was unavailable",
+      "cause": "Timed out waiting for transform from base_link to map to become available, tf error: Lookup would require extrapolation into the past.  Requested time 1787970652.982677 but the earliest data is at time 1787970653.575648, when looking up transform from frame [base_link] to frame [map]",
+      "effect": "a component could not transform robot data into the map frame",
+      "source": "/rosout",
+      "map": null,
+      "label": null,
+      "status": null,
+      "raw_message": "Timed out waiting for transform from base_link to map to become available, tf error: Lookup would require extrapolation into the past.  Requested time 1787970652.982677 but the earliest data is at time 1787970653.575648, when looking up transform from frame [base_link] to frame [map]",
+      "evidence_payload": {
+        "message": "Timed out waiting for transform from base_link to map to become available, tf error: Lookup would require extrapolation into the past.  Requested time 1787970652.982677 but the earliest data is at time 1787970653.575648, when looking up transform from frame [base_link] to frame [map]",
+        "node": "global_costmap.global_costmap"
+      },
+      "causal_occurrence_id": "cause_20_1787970652986242057"
+    },
+    {
+      "run_id": "causal_20260829_022922",
+      "timestamp_ns": 1787970653486164400,
+      "event_name": "map_transform_unavailable",
+      "event_label": "map transform was unavailable",
+      "cause": "Timed out waiting for transform from base_link to map to become available, tf error: Lookup would require extrapolation into the past.  Requested time 1787970653.478671 but the earliest data is at time 1787970653.575648, when looking up transform from frame [base_link] to frame [map]",
+      "effect": "a component could not transform robot data into the map frame",
+      "source": "/rosout",
+      "map": null,
+      "label": null,
+      "status": null,
+      "raw_message": "Timed out waiting for transform from base_link to map to become available, tf error: Lookup would require extrapolation into the past.  Requested time 1787970653.478671 but the earliest data is at time 1787970653.575648, when looking up transform from frame [base_link] to frame [map]",
+      "evidence_payload": {
+        "message": "Timed out waiting for transform from base_link to map to become available, tf error: Lookup would require extrapolation into the past.  Requested time 1787970653.478671 but the earliest data is at time 1787970653.575648, when looking up transform from frame [base_link] to frame [map]",
+        "node": "global_costmap.global_costmap"
+      },
+      "causal_occurrence_id": "cause_21_1787970653486164400"
+    },
+    {
+      "run_id": "causal_20260829_022922",
+      "timestamp_ns": 1787970674543076127,
+      "event_name": "localization_succeeded",
+      "event_label": "localization succeeded",
+      "cause": "AMCL localization settled with three consecutive confident poses: position std dev 0.122 m, yaw std dev 6.9 deg",
+      "effect": "localization succeeded",
+      "source": "/robot/navigation_status",
+      "map": "map1234",
+      "label": "localize (amcl localization)",
+      "status": 4,
+      "raw_message": "AMCL localization settled with three consecutive confident poses: position std dev 0.122 m, yaw std dev 6.9 deg",
+      "evidence_payload": {
+        "event": "finished",
+        "label": "localize (amcl localization)",
+        "name": "localize",
+        "label_id": null,
+        "kind": "navigation",
+        "detail": "amcl localization",
+        "world": null,
+        "yaw": null,
+        "map": "map1234",
+        "status": 4,
+        "localizer": "amcl",
+        "manual_state": "idle_ready",
+        "message": "AMCL localization settled with three consecutive confident poses: position std dev 0.122 m, yaw std dev 6.9 deg"
+      },
+      "causal_occurrence_id": "cause_22_1787970674543076127"
+    },
+    {
+      "run_id": "causal_20260829_022922",
+      "timestamp_ns": 1787970958442488725,
+      "event_name": "navigation_started",
+      "event_label": "navigation started",
+      "cause": "a navigation execution-start event was reported",
+      "effect": "the robot started a navigation task",
+      "source": "/robot/navigation_status",
+      "map": "map1234",
+      "label": "test_label",
+      "status": 2,
+      "raw_message": null,
+      "evidence_payload": {
+        "event": "started",
+        "label": "test_label",
+        "name": "test_label",
+        "label_id": "mtdrqpws-7o746wr",
+        "kind": "navigation",
+        "detail": "",
+        "world": {
+          "x": -2.9899999999999998,
+          "y": 2.35
+        },
+        "yaw": 0.0,
+        "map": "map1234",
+        "status": 2,
+        "localizer": "amcl",
+        "manual_state": "navigating"
+      },
+      "causal_occurrence_id": "cause_23_1787970958442488725"
+    },
+    {
+      "run_id": "causal_20260829_022922",
+      "timestamp_ns": 1787970969107313618,
+      "event_name": "navigation_succeeded",
+      "event_label": "navigation succeeded",
+      "cause": "the navigation subsystem reported a successful completion",
+      "effect": "the navigation task succeeded",
+      "source": "/robot/navigation_status",
+      "map": "map1234",
+      "label": "test_label",
+      "status": 4,
+      "raw_message": null,
+      "evidence_payload": {
+        "event": "finished",
+        "label": "test_label",
+        "name": "test_label",
+        "label_id": "mtdrqpws-7o746wr",
+        "kind": "navigation",
+        "detail": "",
+        "world": {
+          "x": -2.9899999999999998,
+          "y": 2.35
+        },
+        "yaw": 0.0,
+        "map": "map1234",
+        "status": 4,
+        "localizer": "amcl",
+        "manual_state": "idle_ready"
+      },
+      "causal_occurrence_id": "cause_24_1787970969107313618"
+    },
+    {
+      "run_id": "causal_20260829_022922",
+      "timestamp_ns": 1787971017086689146,
+      "event_name": "navigation_started",
+      "event_label": "navigation started",
+      "cause": "a navigation execution-start event was reported",
+      "effect": "the robot started a navigation task",
+      "source": "/robot/navigation_status",
+      "map": "map1234",
+      "label": "me",
+      "status": 2,
+      "raw_message": null,
+      "evidence_payload": {
+        "event": "started",
+        "label": "me",
+        "name": "me",
+        "label_id": "mtakl1vp-d59y5cp",
+        "kind": "navigation",
+        "detail": "",
+        "world": {
+          "x": -1.9099999999999997,
+          "y": -0.5800000000000001
+        },
+        "yaw": 0.0,
+        "map": "map1234",
+        "status": 2,
+        "localizer": "amcl",
+        "manual_state": "navigating"
+      },
+      "causal_occurrence_id": "cause_25_1787971017086689146"
+    }
+  ],
+  "updated_at_ns": 1787971017087629805
+}
