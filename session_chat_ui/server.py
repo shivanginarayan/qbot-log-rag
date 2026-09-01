@@ -2439,6 +2439,13 @@ class ChatRequestHandler(BaseHTTPRequestHandler):
                             "user_id": user_id,
                             "session_id": session["session_id"],
                             "timestamp_utc": utc_now()[1],
+                            "pre_chat_answers": [
+                                {
+                                    "question": question,
+                                    "answer": answer,
+                                }
+                                for question, answer in responses
+                            ],
                             "pre_chat_questions_answers": "\n\n".join(
                                 "Question: {}\nAnswer: {}".format(question, answer)
                                 for question, answer in responses
@@ -2768,7 +2775,12 @@ def main():
         runner=RagRunner(timeout=args.rag_timeout),
         initial_api_key=initial_api_key,
         preparer=SystemPreparer(timeout=args.prepare_timeout),
-        user_testing_logger=UserTestingExcelLogger(USER_TESTING_WORKBOOK),
+        user_testing_logger=UserTestingExcelLogger(
+            USER_TESTING_WORKBOOK,
+            pre_chat_questions=tuple(
+                question["text"] for question in DEMOGRAPHIC_QUESTIONS
+            ),
+        ),
     )
     initial_api_key = None
 
