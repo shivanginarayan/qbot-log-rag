@@ -12,6 +12,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -48,6 +49,13 @@ else:
 ROOT = Path(__file__).resolve().parents[1]
 MAPS_DIR = ROOT / "maps"
 REPO_DIR = ROOT.parent
+if str(REPO_DIR) not in sys.path:
+    sys.path.insert(0, str(REPO_DIR))
+
+from ros_domain_config import get_ros_domain_id
+
+
+DEFAULT_ROS_DOMAIN_ID = get_ros_domain_id()
 RUN_NAVIGATION_SCRIPT = REPO_DIR / "run_qbot_navigation.sh"
 RUN_MAPPING_SCRIPT = REPO_DIR / "run_qbot_mapping.sh"
 REBUILD_NAVIGATION_SCRIPT = REPO_DIR / "rebuild_qbot_navigation.sh"
@@ -1234,7 +1242,7 @@ class NavigationManager:
         run_script: Path = RUN_NAVIGATION_SCRIPT,
         rebuild_script: Path = REBUILD_NAVIGATION_SCRIPT,
         scan_filter_file: Path = SCAN_FILTER_FILE,
-        ros_domain_id: int = 63,
+        ros_domain_id: int = DEFAULT_ROS_DOMAIN_ID,
         adaptive_goal_tolerance: bool = True,
         readiness_timeout: float = 300.0,
         probe_interval: float = 1.0,
@@ -2080,7 +2088,7 @@ class MappingManager:
         run_script: Path = RUN_MAPPING_SCRIPT,
         rebuild_script: Path = REBUILD_NAVIGATION_SCRIPT,
         scan_filter_file: Path = SCAN_FILTER_FILE,
-        ros_domain_id: int = 63,
+        ros_domain_id: int = DEFAULT_ROS_DOMAIN_ID,
         readiness_timeout: float = 300.0,
         save_timeout: float = 30.0,
         probe_interval: float = 1.0,
@@ -4024,7 +4032,9 @@ class Handler(BaseHTTPRequestHandler):
                         "into open space."
                     )
                 topic = str(getattr(self.server, "label_topic", "/label"))
-                ros_domain_id = int(getattr(self.server, "ros_domain_id", 63))
+                ros_domain_id = int(
+                    getattr(self.server, "ros_domain_id", DEFAULT_ROS_DOMAIN_ID)
+                )
                 if monitor is not None:
                     current_goal = monitor.navigation_snapshot()
                     if current_goal.get("event") in {"submitting", "running"}:
@@ -4065,7 +4075,9 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/api/stop":
                 self.read_json_body()
                 topic = str(getattr(self.server, "label_topic", "/label"))
-                ros_domain_id = int(getattr(self.server, "ros_domain_id", 63))
+                ros_domain_id = int(
+                    getattr(self.server, "ros_domain_id", DEFAULT_ROS_DOMAIN_ID)
+                )
                 with self.server.navigation_lock:
                     self.server.stop_generation += 1
                 manager = self.navigation_manager()
@@ -4096,7 +4108,9 @@ class Handler(BaseHTTPRequestHandler):
                         "The navigation status acknowledgement monitor is unavailable"
                     )
                 topic = str(getattr(self.server, "label_topic", "/label"))
-                ros_domain_id = int(getattr(self.server, "ros_domain_id", 63))
+                ros_domain_id = int(
+                    getattr(self.server, "ros_domain_id", DEFAULT_ROS_DOMAIN_ID)
+                )
                 command_timeout = float(getattr(self.server, "go_timeout", 10))
                 command_deadline = time.monotonic() + command_timeout
                 acknowledgement_sequence = monitor.navigation_event_sequence()
@@ -4302,8 +4316,8 @@ def main() -> None:
     parser.add_argument(
         "--ros-domain-id",
         type=int,
-        default=63,
-        help="ROS domain used by the Go button (default: 63)",
+        default=DEFAULT_ROS_DOMAIN_ID,
+        help="ROS domain used by the Go button (from ros_domain_constants.sh)",
     )
     args = parser.parse_args()
     if args.go_timeout <= 0:

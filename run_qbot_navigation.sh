@@ -3,6 +3,7 @@
 set -eo pipefail
 
 RUN_REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$RUN_REPO_DIR/ros_domain_constants.sh"
 RUN_NAV_DIR="$RUN_REPO_DIR/robot_navigation"
 RUN_MAP_DIR="$RUN_NAV_DIR/maps"
 RUN_QBOT_SETUP="$HOME/ros2/install/setup.bash"
@@ -138,7 +139,7 @@ RUN_SCAN_FILTER="$(realpath "$RUN_SCAN_FILTER")"
 if [ -n "$RUN_PBSTREAM" ]; then
     RUN_PBSTREAM="$(realpath "$RUN_PBSTREAM")"
 fi
-export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-63}"
+export ROS_DOMAIN_ID="$QBOT_ROS_DOMAIN_ID"
 
 echo "=========================================="
 echo " QBot Navigation"

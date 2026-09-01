@@ -3,10 +3,11 @@
 set -eo pipefail
 
 REBUILD_REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$REBUILD_REPO_DIR/ros_domain_constants.sh"
 REBUILD_NAV_DIR="$REBUILD_REPO_DIR/robot_navigation"
 REBUILD_QBOT_SETUP="$HOME/ros2/install/setup.bash"
 
-export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-63}"
+export ROS_DOMAIN_ID="$QBOT_ROS_DOMAIN_ID"
 
 if [ ! -f /opt/ros/humble/setup.bash ]; then
     echo "ERROR: ROS Humble setup not found: /opt/ros/humble/setup.bash"

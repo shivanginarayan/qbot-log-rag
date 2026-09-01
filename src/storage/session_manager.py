@@ -3,22 +3,33 @@ import os
 import socket
 import sqlite3
 import subprocess
+import sys
 import time
 import uuid
 from datetime import datetime
+from pathlib import Path
+
+
+REPO_DIR = Path(__file__).resolve().parents[2]
+if str(REPO_DIR) not in sys.path:
+    sys.path.insert(0, str(REPO_DIR))
+
+from ros_domain_config import get_ros_domain_id
 
 
 class SessionManager:
     def __init__(
         self,
         base_log_dir="runtime_logs",
-        ROS_DOMAIN_ID=39,
+        ROS_DOMAIN_ID=None,
         map_name="home_test_v1",
         map_yaml_path=None,
         notes=None,
     ):
         self.base_log_dir = base_log_dir
-        self.ros_domain_id = ros_domain_id
+        self.ros_domain_id = (
+            get_ros_domain_id() if ROS_DOMAIN_ID is None else ROS_DOMAIN_ID
+        )
         self.map_name = map_name
         self.map_yaml_path = map_yaml_path
         self.notes = notes

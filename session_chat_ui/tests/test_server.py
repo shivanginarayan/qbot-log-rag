@@ -464,13 +464,21 @@ class UserTestingExcelLoggerTest(unittest.TestCase):
     def test_creates_one_workbook_with_chat_and_feedback_records(self):
         with tempfile.TemporaryDirectory() as directory:
             workbook = Path(directory) / "qbot_user_testing.xlsx"
-            logger = UserTestingExcelLogger(workbook)
+            logger = UserTestingExcelLogger(
+                workbook, pre_chat_questions=("What year were you born?",)
+            )
             logger.append(
                 {
                     "event_type": "pre_chat_survey",
                     "user_id": "student-17",
                     "session_id": "session-a",
                     "timestamp_utc": "2026-08-31T11:55:00Z",
+                    "pre_chat_answers": [
+                        {
+                            "question": "What year were you born?",
+                            "answer": "1998",
+                        }
+                    ],
                     "pre_chat_questions_answers": "Question: What year were you born?\nAnswer: 1998",
                 }
             )
@@ -503,9 +511,12 @@ class UserTestingExcelLoggerTest(unittest.TestCase):
             with zipfile.ZipFile(workbook) as archive:
                 summary = archive.read("xl/worksheets/sheet1.xml").decode()
                 interactions = archive.read("xl/worksheets/sheet2.xml").decode()
+                pre_chat = archive.read("xl/worksheets/sheet3.xml").decode()
 
             self.assertIn("Easy to use.", summary)
             self.assertIn("Where did the robot go?", interactions)
+            self.assertIn("What year were you born?", pre_chat)
+            self.assertIn("1998", pre_chat)
 
 
 class DemographicRequestFlowTest(unittest.TestCase):

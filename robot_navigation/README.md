@@ -231,13 +231,15 @@ label name.
 To return to the saved starting pose:
 
 ```bash
-ROS_DOMAIN_ID=39 ros2 run milton_final_project return_to_start
+source ../ros_domain_constants.sh
+ROS_DOMAIN_ID="$QBOT_ROS_DOMAIN_ID" ros2 run milton_final_project return_to_start
 ```
 
 The same behavior is also available through:
 
 ```bash
-ROS_DOMAIN_ID=39 ros2 run milton_final_project navigate_to_label -- --start
+source ../ros_domain_constants.sh
+ROS_DOMAIN_ID="$QBOT_ROS_DOMAIN_ID" ros2 run milton_final_project navigate_to_label -- --start
 ```
 
 Default web ports are kept separate: live SLAM map `8090`, mapping LiDAR/filter

@@ -3,7 +3,8 @@ Here’s the updated clean workflow for `qbot_platform` with the fixed label GUI
 **1. Start Mapping**
 
 ```bash
-export ROS_DOMAIN_ID=1
+source /path/to/qbot-log-rag/ros_domain_constants.sh
+export ROS_DOMAIN_ID="$QBOT_ROS_DOMAIN_ID"
 cd /home/nvidia/857_Final_Project_Code
 source /opt/ros/humble/setup.bash
 source install/setup.bash
@@ -25,7 +26,8 @@ A + drive = reverse
 Open a second terminal:
 
 ```bash
-export ROS_DOMAIN_ID=1
+source /path/to/qbot-log-rag/ros_domain_constants.sh
+export ROS_DOMAIN_ID="$QBOT_ROS_DOMAIN_ID"
 cd /home/nvidia/857_Final_Project_Code
 source /opt/ros/humble/setup.bash
 source install/setup.bash
@@ -73,7 +75,8 @@ maps/lab_map_new_labels.json
 **4. Start Nav2**
 
 ```bash
-export ROS_DOMAIN_ID=1
+source /path/to/qbot-log-rag/ros_domain_constants.sh
+export ROS_DOMAIN_ID="$QBOT_ROS_DOMAIN_ID"
 cd /home/nvidia/857_Final_Project_Code
 source /opt/ros/humble/setup.bash
 source install/setup.bash
@@ -87,7 +90,8 @@ Then set the robot’s pose in RViz with **2D Pose Estimate**.
 
 Read the label position:
 
-export ROS_DOMAIN_ID=1
+source /path/to/qbot-log-rag/ros_domain_constants.sh
+export ROS_DOMAIN_ID="$QBOT_ROS_DOMAIN_ID"
 cd /home/nvidia/857_Final_Project_Code
 source /opt/ros/humble/setup.bash
 source install/setup.bash

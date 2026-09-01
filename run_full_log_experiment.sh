@@ -56,6 +56,7 @@ CHAT_UI_PORT=8766
 
 
 cd "$REPO_DIR" || exit 1
+source "$REPO_DIR/ros_domain_constants.sh"
 
 
 # ============================================================
@@ -90,14 +91,14 @@ fi
 
 QBOT_INHERITED_DOMAIN="${ROS_DOMAIN_ID:-}"
 
-export ROS_DOMAIN_ID=63
+export ROS_DOMAIN_ID="$QBOT_ROS_DOMAIN_ID"
 
 
 echo
 echo "Using ROS_DOMAIN_ID=$ROS_DOMAIN_ID"
 
 
-# A bare terminal gives run_qbot_map_labeler.sh 63, and this
+# A bare terminal gives run_qbot_map_labeler.sh the shared ROS domain, and this
 # experiment uses the same domain so both stacks land on one ROS
 # graph. Only say something when the shell asked for a different
 # domain than the one the experiment is about to use.
@@ -539,7 +540,7 @@ cleanup_stale_experiment() {
     # This does NOT stop ROS nodes.
     # --------------------------------------------------------
 
-    ROS_DOMAIN_ID=63 \
+    ROS_DOMAIN_ID="$QBOT_ROS_DOMAIN_ID" \
         ros2 daemon stop \
         >/dev/null 2>&1 || true
 
@@ -547,7 +548,7 @@ cleanup_stale_experiment() {
     sleep 1
 
 
-    ROS_DOMAIN_ID=63 \
+    ROS_DOMAIN_ID="$QBOT_ROS_DOMAIN_ID" \
         ros2 daemon start \
         >/dev/null 2>&1 || true
 
@@ -785,10 +786,7 @@ conn.execute(
         ).isoformat(),
         "qbot",
         int(
-            os.environ.get(
-                "ROS_DOMAIN_ID",
-                "63",
-            )
+            os.environ["ROS_DOMAIN_ID"]
         ),
         None,
         git_commit,
@@ -1203,7 +1201,7 @@ cleanup_processes() {
     echo "Refreshing ROS 2 daemon..."
 
 
-    ROS_DOMAIN_ID=63 \
+    ROS_DOMAIN_ID="$QBOT_ROS_DOMAIN_ID" \
         ros2 daemon stop \
         >/dev/null 2>&1 || true
 
@@ -1211,7 +1209,7 @@ cleanup_processes() {
     sleep 1
 
 
-    ROS_DOMAIN_ID=63 \
+    ROS_DOMAIN_ID="$QBOT_ROS_DOMAIN_ID" \
         ros2 daemon start \
         >/dev/null 2>&1 || true
 

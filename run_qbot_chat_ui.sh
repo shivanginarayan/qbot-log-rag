@@ -4,12 +4,13 @@ set -eo pipefail
 umask 077
 
 CHAT_REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$CHAT_REPO_DIR/ros_domain_constants.sh"
 CHAT_HOST="${QBOT_CHAT_HOST:-0.0.0.0}"
 CHAT_PORT="${QBOT_CHAT_PORT:-8766}"
 CHAT_LOG_FILE="${QBOT_CHAT_LOG_FILE:-$CHAT_REPO_DIR/runtime_logs/private_chat/qbot_chat_history.xlsx}"
 CHAT_EMBED_LOG="$CHAT_REPO_DIR/runtime_logs/qbot_embedding_server.log"
 
-export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-60}"
+export ROS_DOMAIN_ID="$QBOT_ROS_DOMAIN_ID"
 export HF_HOME="${QBOT_CHAT_HF_HOME:-$CHAT_REPO_DIR/runtime_logs/huggingface}"
 export TRANSFORMERS_CACHE="$HF_HOME/transformers"
 
