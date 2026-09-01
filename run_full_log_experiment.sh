@@ -48,7 +48,7 @@ set -u
 # PATHS
 # ============================================================
 
-REPO_DIR="$HOME/ENGR857_Narayan_Shivangi/project/qbot-log-rag"
+REPO_DIR="$HOME/qbot-log-rag"
 
 RUNTIME_DIR="$REPO_DIR/runtime_logs"
 
@@ -90,28 +90,28 @@ fi
 
 QBOT_INHERITED_DOMAIN="${ROS_DOMAIN_ID:-}"
 
-export ROS_DOMAIN_ID=57
+export ROS_DOMAIN_ID=63
 
 
 echo
 echo "Using ROS_DOMAIN_ID=$ROS_DOMAIN_ID"
 
 
-# A bare terminal gives run_qbot_map_labeler.sh 63, while this
-# experiment always uses 57. Both stacks work, but they are
-# different ROS graphs, so say so before the two runs get
-# compared against each other.
+# A bare terminal gives run_qbot_map_labeler.sh 63, and this
+# experiment uses the same domain so both stacks land on one ROS
+# graph. Only say something when the shell asked for a different
+# domain than the one the experiment is about to use.
 
 if [ -n "$QBOT_INHERITED_DOMAIN" ] \
-    && [ "$QBOT_INHERITED_DOMAIN" != "57" ]
+    && [ "$QBOT_INHERITED_DOMAIN" != "$ROS_DOMAIN_ID" ]
 then
 
     echo
     echo "NOTE: this shell had ROS_DOMAIN_ID=$QBOT_INHERITED_DOMAIN;"
-    echo "      the experiment forces 57."
+    echo "      the experiment forces $ROS_DOMAIN_ID."
     echo
     echo "      To compare against a standalone run, use:"
-    echo "        ROS_DOMAIN_ID=57 ./run_qbot_map_labeler.sh"
+    echo "        ROS_DOMAIN_ID=$ROS_DOMAIN_ID ./run_qbot_map_labeler.sh"
 
 fi
 
@@ -410,6 +410,11 @@ signal_evidence_processes() {
 
     signal_user_processes_matching \
         "$signal_name" \
+        'comparison_experiments/explaining_autonomy/live_rosout_index\.py'
+
+
+    signal_user_processes_matching \
+        "$signal_name" \
         'ros2 bag record'
 
 }
@@ -534,7 +539,7 @@ cleanup_stale_experiment() {
     # This does NOT stop ROS nodes.
     # --------------------------------------------------------
 
-    ROS_DOMAIN_ID=57 \
+    ROS_DOMAIN_ID=63 \
         ros2 daemon stop \
         >/dev/null 2>&1 || true
 
@@ -542,7 +547,7 @@ cleanup_stale_experiment() {
     sleep 1
 
 
-    ROS_DOMAIN_ID=57 \
+    ROS_DOMAIN_ID=63 \
         ros2 daemon start \
         >/dev/null 2>&1 || true
 
@@ -779,7 +784,12 @@ conn.execute(
             timezone.utc
         ).isoformat(),
         "qbot",
-        57,
+        int(
+            os.environ.get(
+                "ROS_DOMAIN_ID",
+                "63",
+            )
+        ),
         None,
         git_commit,
         "running",
@@ -1193,7 +1203,7 @@ cleanup_processes() {
     echo "Refreshing ROS 2 daemon..."
 
 
-    ROS_DOMAIN_ID=57 \
+    ROS_DOMAIN_ID=63 \
         ros2 daemon stop \
         >/dev/null 2>&1 || true
 
@@ -1201,7 +1211,7 @@ cleanup_processes() {
     sleep 1
 
 
-    ROS_DOMAIN_ID=57 \
+    ROS_DOMAIN_ID=63 \
         ros2 daemon start \
         >/dev/null 2>&1 || true
 
