@@ -48,7 +48,7 @@ set -u
 # PATHS
 # ============================================================
 
-REPO_DIR="$HOME/qbot-log-rag"
+REPO_DIR="$HOME/ENGR857_Narayan_Shivangi/project/qbot-log-rag"
 
 RUNTIME_DIR="$REPO_DIR/runtime_logs"
 
