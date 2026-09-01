@@ -28,7 +28,7 @@ if [ -f ".venv/bin/activate" ]; then
     source .venv/bin/activate
 fi
 
-export ROS_DOMAIN_ID=57
+export ROS_DOMAIN_ID=39
 
 SESSION_ID="latest"
 QUESTION=""

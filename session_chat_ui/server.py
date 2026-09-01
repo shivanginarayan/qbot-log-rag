@@ -75,9 +75,6 @@ SYSTEMS = {
         "evidence_pattern": PACKET_PATTERN,
     },
     "rosout": {
-        # True identity, used only in logs and analysis. Participants see an
-        # anonymous "System X"; this baseline is not implemented yet, so its
-        # button stays greyed out as "coming soon".
         "label": "Explaining autonomy",
         "description": (
             "Explaining-Autonomy style: BGE-M3 semantic retrieval over this "
@@ -1624,14 +1621,11 @@ class ChatApplication:
         if build["state"] == "preparing":
             return "preparing", build["detail"], build["progress"]
 
-        if rosout_index_path(session_id).is_file():
-            if not embedding_ready:
-                return "unavailable", EMBEDDING_OFFLINE_DETAIL, None
-            if not api_key_configured:
-                return "blocked", MISSING_API_KEY_DETAIL, None
-            return "ready", "", None
+        persistent_memory_path = ROSOUT_INDEX_ROOT / "persistent_rosout_memory.json"
+        has_session_rosout_bag = rosout_bag_dir(session_id).is_dir()
+        has_persistent_rosout_memory = persistent_memory_path.is_file()
 
-        if not rosout_bag_dir(session_id).is_dir():
+        if not has_session_rosout_bag and not has_persistent_rosout_memory:
             return (
                 "unavailable",
                 "No /rosout recording was made for this session.",
@@ -1639,16 +1633,18 @@ class ChatApplication:
             )
         if not embedding_ready:
             return "unavailable", EMBEDDING_OFFLINE_DETAIL, None
+        if not api_key_configured:
+            return "blocked", MISSING_API_KEY_DETAIL, None
+
         if build["state"] == "failed":
             return "failed", build["detail"], None
         if build["state"] == "busy":
             return "needs_preparation", build["detail"], None
 
-        return (
-            "needs_preparation",
-            "Select this system to build its /rosout index.",
-            None,
-        )
+        if rosout_index_path(session_id).is_file():
+            return "ready", "", None
+
+        return "ready", "", None
 
     @staticmethod
     def _participant_detail(system, state, detail):
@@ -1664,8 +1660,8 @@ class ChatApplication:
             return MISSING_API_KEY_DETAIL
         if state == "preparing":
             return "Preparing…"
-        if system == "rosout":
-            return COMING_SOON_DETAIL
+        if state == "needs_preparation":
+            return "Select this system to prepare it."
         return UNAVAILABLE_DETAIL
 
     def system_states(
@@ -2404,7 +2400,11 @@ class ChatRequestHandler(BaseHTTPRequestHandler):
             return
 
         session_id = session["session_id"]
-        if not rosout_bag_dir(session_id).is_dir():
+        persistent_memory_path = ROSOUT_INDEX_ROOT / "persistent_rosout_memory.json"
+        has_session_rosout_bag = rosout_bag_dir(session_id).is_dir()
+        has_persistent_rosout_memory = persistent_memory_path.is_file()
+
+        if not has_session_rosout_bag and not has_persistent_rosout_memory:
             self._send_json(
                 409,
                 {
@@ -2416,7 +2416,8 @@ class ChatRequestHandler(BaseHTTPRequestHandler):
             )
             return
 
-        self.server.application.preparer.start(session_id)
+        if has_session_rosout_bag:
+            self.server.application.preparer.start(session_id)
         self._send_json(
             200,
             {"system": self.server.application.system_state(system, session)},

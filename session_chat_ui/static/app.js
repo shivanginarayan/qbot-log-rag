@@ -356,8 +356,8 @@ function renderSystems() {
 
     const button = ensureSystemButton(id);
     const isTarget = id === switchingTo;
-    // Only ready systems are clickable. The Explaining-autonomy baseline is
-    // deferred, so its slot stays greyed with a "coming soon" note.
+    // Only ready systems are clickable; the /rosout baseline follows the same
+    // active/blocked lifecycle as the other runtime-backed systems.
     const selectable = Boolean(entry.actionable);
     // While switching, only the incoming system is highlighted: the outgoing
     // one is already put away.
@@ -490,9 +490,41 @@ async function selectSystem(id) {
   const entry = systemEntry(id);
   if (!entry) return;
 
-  // Only ready systems can be selected. Non-ready ones (e.g. the deferred
-  // "coming soon" baseline) just report their anonymized status.
   if (!entry.actionable) {
+    if (id === "rosout" && entry.state === "needs_preparation") {
+      switchingTo = id;
+      updateComposerLock();
+      renderSystems();
+
+      try {
+        const response = await fetch("/api/system/prepare", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          cache: "no-store",
+          body: JSON.stringify({ system: id }),
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || "The /rosout index could not be prepared.");
+        }
+
+        await refreshStatus();
+        if (systemEntry(id) && systemEntry(id).ready) {
+          await applySystem(id);
+          setNotice(`${entry.label} is ready.`);
+          return;
+        }
+        setNotice(systemHeadline(systemEntry(id) || entry));
+        return;
+      } catch (error) {
+        switchingTo = "";
+        updateComposerLock();
+        renderSystems();
+        setNotice(error.message || "The /rosout index could not be prepared.");
+        return;
+      }
+    }
+
     setNotice(systemHeadline(entry));
     return;
   }
@@ -916,7 +948,7 @@ chatForm.addEventListener("submit", async (event) => {
   if (statusLoaded && activeEntry && !activeEntry.ready) {
     setNotice(
       activeEntry.detail
-        || `${activeEntry.label} is not ready to answer questions.`,
+      || `${activeEntry.label} is not ready to answer questions.`,
     );
     return;
   }

@@ -31,6 +31,9 @@ venv/
 # Runtime data
 data/processed/
 *.jsonl
+*.xlsx
+*.xls
+*database_export*
 
 # Cache
 __pycache__/
