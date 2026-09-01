@@ -27,6 +27,8 @@ from urllib.error import URLError
 from urllib.parse import urlsplit
 from urllib.request import urlopen
 
+from user_testing_export import UserTestingExcelLogger
+
 
 UI_DIR = Path(__file__).resolve().parent
 REPO_DIR = UI_DIR.parent
@@ -58,6 +60,9 @@ MAX_ERROR_LENGTH = 4000
 MAX_API_KEY_LENGTH = 1024
 MAX_HISTORY_ITEMS = 100
 MAX_DEMOGRAPHIC_RESPONSE_LENGTH = 2000
+MAX_FEEDBACK_COMMENT_LENGTH = 2000
+MAX_FEEDBACK_INTERVIEWS = 50
+USER_TESTING_WORKBOOK = RUNTIME_DIR / "user_testing" / "qbot_user_testing.xlsx"
 
 DEFAULT_SYSTEM = "proposed"
 
@@ -795,6 +800,35 @@ class ChatStore:
         interactions.reverse()
         return interactions
 
+    @staticmethod
+    def feedback_interactions(session, user_id, request_ids):
+        """Read the submitted chat records without changing robot.db."""
+
+        if not request_ids:
+            return []
+        connection = None
+        try:
+            database_uri = "file:{}?mode=ro".format(session["database"])
+            connection = sqlite3.connect(database_uri, timeout=2, uri=True)
+            connection.row_factory = sqlite3.Row
+            placeholders = ", ".join("?" for _ in request_ids)
+            rows = connection.execute(
+                """
+                SELECT request_id, question, robot_response
+                FROM ui_chat_interactions
+                WHERE session_id = ? AND user_id = ?
+                  AND request_id IN ({}) AND robot_response != ''
+                """.format(placeholders),
+                [session["session_id"], user_id] + request_ids,
+            ).fetchall()
+            by_id = {str(row["request_id"]): row for row in rows}
+            return [by_id[request_id] for request_id in request_ids if request_id in by_id]
+        except (OSError, sqlite3.Error):
+            return []
+        finally:
+            if connection is not None:
+                connection.close()
+
     def register_participant(self, session, user_id):
         logged_in_at_ns, logged_in_at_iso = utc_now()
 
@@ -894,6 +928,30 @@ class ChatStore:
             "completed": next_index is None,
             "next_question_index": next_index,
         }
+
+    @staticmethod
+    def demographic_responses(session, user_id):
+        """Read completed pre-chat answers for the separate Excel export."""
+
+        connection = None
+        try:
+            database_uri = "file:{}?mode=ro".format(session["database"])
+            connection = sqlite3.connect(database_uri, timeout=2, uri=True)
+            rows = connection.execute(
+                """
+                SELECT question_text, response_value
+                FROM ui_demographic_responses
+                WHERE session_id = ? AND user_id = ?
+                ORDER BY question_index
+                """,
+                (session["session_id"], user_id),
+            ).fetchall()
+            return [(str(row[0]), str(row[1])) for row in rows]
+        except (OSError, sqlite3.Error):
+            return []
+        finally:
+            if connection is not None:
+                connection.close()
 
     def save_demographic_answer(
         self,
@@ -1522,12 +1580,14 @@ class ChatApplication:
         initial_api_key="",
         map_locator=None,
         preparer=None,
+        user_testing_logger=None,
     ):
         self.locator = locator
         self.store = store
         self.runner = runner
         self.map_locator = map_locator or MapStatusLocator()
         self.preparer = preparer or SystemPreparer()
+        self.user_testing_logger = user_testing_logger
         self.request_slots = threading.BoundedSemaphore(max_parallel_requests)
         self._api_key_lock = threading.Lock()
         self._api_key = initial_api_key.strip()
@@ -1896,6 +1956,10 @@ class ChatRequestHandler(BaseHTTPRequestHandler):
             self._handle_demographics()
             return
 
+        if path == "/api/feedback":
+            self._handle_feedback()
+            return
+
         if path == "/api/status":
             self._handle_status()
             return
@@ -2106,6 +2170,27 @@ class ChatRequestHandler(BaseHTTPRequestHandler):
                     },
                 )
                 return
+
+            if self.server.application.user_testing_logger is not None:
+                try:
+                    self.server.application.user_testing_logger.append(
+                        {
+                            "event_type": "chat",
+                            "user_id": user_id,
+                            "session_id": session["session_id"],
+                            "timestamp_utc": utc_now()[1],
+                            "question": question,
+                            "robot_response": answer,
+                            "chat_status": record_status,
+                            "request_id": request_id,
+                            "system_slot": "System {}".format(
+                                dict((real, slot) for slot, real in assign_slots(user_id))[system]
+                            ),
+                            "backend_system": system,
+                        }
+                    )
+                except Exception as exc:
+                    print("User-testing Excel chat export failed: {}".format(exc))
 
             self._send_json(
                 http_status,
@@ -2340,6 +2425,26 @@ class ChatRequestHandler(BaseHTTPRequestHandler):
             progress = self.server.application.store.demographic_progress(
                 session, user_id
             )
+            if progress["completed"]:
+                logger = self.server.application.user_testing_logger
+                if logger is not None:
+                    responses = self.server.application.store.demographic_responses(
+                        session, user_id
+                    )
+                    if len(responses) != len(DEMOGRAPHIC_QUESTIONS):
+                        raise RuntimeError("The completed survey could not be read.")
+                    logger.append(
+                        {
+                            "event_type": "pre_chat_survey",
+                            "user_id": user_id,
+                            "session_id": session["session_id"],
+                            "timestamp_utc": utc_now()[1],
+                            "pre_chat_questions_answers": "\n\n".join(
+                                "Question: {}\nAnswer: {}".format(question, answer)
+                                for question, answer in responses
+                            ),
+                        }
+                    )
         except Exception as exc:
             print("Demographic response storage failed: {}".format(exc))
             self._send_json(
@@ -2362,6 +2467,131 @@ class ChatRequestHandler(BaseHTTPRequestHandler):
                 ),
             },
         )
+
+    def _handle_feedback(self):
+        payload = self._read_json_payload()
+        if payload is None:
+            return
+
+        user_id = payload.get("user_id", "")
+        interviews = payload.get("interviews", [])
+        experience = payload.get("experience", "")
+        other_feedback = payload.get("other_feedback", "")
+        satisfaction_ratings = payload.get("satisfaction_ratings", [])
+        trust_ratings = payload.get("trust_ratings", [])
+
+        if not isinstance(user_id, str):
+            user_id = ""
+        if not isinstance(experience, str) or not isinstance(other_feedback, str):
+            self._send_json(400, {"error": "Feedback text is invalid."})
+            return
+        user_id = user_id.strip()
+        experience = experience.strip()
+        other_feedback = other_feedback.strip()
+
+        if not user_id or len(user_id) > MAX_USER_ID_LENGTH:
+            self._send_json(400, {"error": "A valid User ID is required."})
+            return
+        if has_control_characters(user_id):
+            self._send_json(
+                400, {"error": "User ID contains invalid characters."}
+            )
+            return
+        if len(experience) > MAX_FEEDBACK_COMMENT_LENGTH or len(other_feedback) > MAX_FEEDBACK_COMMENT_LENGTH:
+            self._send_json(400, {"error": "Feedback text is too long."})
+            return
+        if not isinstance(interviews, list) or len(interviews) > MAX_FEEDBACK_INTERVIEWS:
+            self._send_json(400, {"error": "The interview responses are invalid."})
+            return
+        if not isinstance(satisfaction_ratings, list) or len(satisfaction_ratings) != 7:
+            self._send_json(400, {"error": "Answer all satisfaction-scale items."})
+            return
+        if not isinstance(trust_ratings, list) or len(trust_ratings) != 6:
+            self._send_json(400, {"error": "Answer all trust-scale items."})
+            return
+
+        session = self.server.application.locator.locate()
+        if session is None:
+            self._send_json(
+                503, {"error": "No active QBot experiment database was found."}
+            )
+            return
+
+        try:
+            progress = self.server.application.store.demographic_progress(
+                session, user_id
+            )
+            if not progress["completed"]:
+                self._send_json(
+                    403,
+                    {"error": "Complete the demographic questionnaire first."},
+                )
+                return
+            logger = self.server.application.user_testing_logger
+            if logger is None:
+                raise RuntimeError("The user-testing Excel export is unavailable.")
+            request_ids = []
+            interview_responses = []
+            for interview in interviews:
+                if not isinstance(interview, dict):
+                    raise ValueError("The interview responses are invalid.")
+                request_id = interview.get("request_id", "")
+                fields = [
+                    interview.get("hoped_to_clarify", ""),
+                    interview.get("helpful", ""),
+                    interview.get("unclear", ""),
+                    interview.get("missing", ""),
+                ]
+                if not isinstance(request_id, str) or not all(isinstance(value, str) for value in fields):
+                    raise ValueError("The interview responses are invalid.")
+                if any(len(value.strip()) > MAX_FEEDBACK_COMMENT_LENGTH for value in fields):
+                    raise ValueError("An interview response is too long.")
+                request_ids.append(request_id)
+                interview_responses.append([value.strip() for value in fields])
+            if len(set(request_ids)) != len(request_ids):
+                raise ValueError("Each chat question can be interviewed once.")
+            if any(str(value) not in {"1", "2", "3", "4", "5"} for value in satisfaction_ratings + trust_ratings):
+                raise ValueError("Scale ratings must be from 1 to 5.")
+            interactions = self.server.application.store.feedback_interactions(
+                session, user_id, request_ids
+            )
+            if len(interactions) != len(request_ids):
+                raise ValueError("One or more chat questions could not be found.")
+            per_question_interviews = []
+            for interaction, answers in zip(interactions, interview_responses):
+                per_question_interviews.append(
+                    "Question: {question}\nResponse: {response}\nHoped to clarify: {clarify}\nHelpful: {helpful}\nUnclear: {unclear}\nMissing: {missing}".format(
+                        question=interaction["question"], response=interaction["robot_response"],
+                        clarify=answers[0], helpful=answers[1], unclear=answers[2], missing=answers[3],
+                    )
+                )
+            logger.append(
+                {
+                    "event_type": "post_chat_feedback",
+                    "user_id": user_id,
+                    "session_id": session["session_id"],
+                    "timestamp_utc": utc_now()[1],
+                    "per_question_interviews": "\n\n".join(per_question_interviews),
+                    "experience_with_robot": experience,
+                    "other_feedback": other_feedback,
+                    **{
+                        "satisfaction_{}_{}".format(index + 1, key): str(value)
+                        for index, (key, value) in enumerate(zip(("know_how", "satisfying", "sufficient_detail", "complete", "how_to_use", "useful_to_goals", "accuracy"), satisfaction_ratings))
+                    },
+                    **{
+                        "trust_{}_{}".format(index + 1, key): str(value)
+                        for index, (key, value) in enumerate(zip(("confident", "predictable", "reliable", "safe", "efficient", "wary"), trust_ratings))
+                    },
+                }
+            )
+        except Exception as exc:
+            print("Post-chat feedback storage failed: {}".format(exc))
+            self._send_json(
+                503, {"error": "The feedback could not be saved."}
+            )
+            return
+
+        self._send_json(200, {"saved": True})
 
     def _handle_system_prepare(self):
         payload = self._read_json_payload()
@@ -2538,6 +2768,7 @@ def main():
         runner=RagRunner(timeout=args.rag_timeout),
         initial_api_key=initial_api_key,
         preparer=SystemPreparer(timeout=args.prepare_timeout),
+        user_testing_logger=UserTestingExcelLogger(USER_TESTING_WORKBOOK),
     )
     initial_api_key = None
 
@@ -2556,6 +2787,7 @@ def main():
         )
     )
     print("Chat database: active session robot.db (auto-detected)")
+    print("User-testing Excel export: {}".format(USER_TESTING_WORKBOOK))
 
     session = locator.locate()
     if session:

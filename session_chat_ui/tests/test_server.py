@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -15,6 +16,7 @@ if str(UI_DIR) not in sys.path:
 
 import server  # noqa: E402
 import rag_compat  # noqa: E402
+from user_testing_export import UserTestingExcelLogger  # noqa: E402
 
 
 def create_session_database(runtime_dir, session_id, status, started_at_ns):
@@ -313,6 +315,7 @@ class ChatStoreTest(unittest.TestCase):
             self.assertNotIn("api_key", columns)
             self.assertNotIn("nvidia_api_key", columns)
 
+
     def test_failed_answer_is_also_completed_in_database(self):
         with tempfile.TemporaryDirectory() as directory:
             database = create_session_database(
@@ -457,6 +460,54 @@ class ChatStoreTest(unittest.TestCase):
             )
 
 
+class UserTestingExcelLoggerTest(unittest.TestCase):
+    def test_creates_one_workbook_with_chat_and_feedback_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workbook = Path(directory) / "qbot_user_testing.xlsx"
+            logger = UserTestingExcelLogger(workbook)
+            logger.append(
+                {
+                    "event_type": "pre_chat_survey",
+                    "user_id": "student-17",
+                    "session_id": "session-a",
+                    "timestamp_utc": "2026-08-31T11:55:00Z",
+                    "pre_chat_questions_answers": "Question: What year were you born?\nAnswer: 1998",
+                }
+            )
+            logger.append(
+                {
+                    "event_type": "chat",
+                    "request_id": "chat-1",
+                    "user_id": "student-17",
+                    "session_id": "session-a",
+                    "timestamp_utc": "2026-08-31T12:00:00Z",
+                    "question": "Where did the robot go?",
+                    "robot_response": "It navigated to the lab.",
+                    "chat_status": "answered",
+                }
+            )
+            logger.append(
+                {
+                    "event_type": "post_chat_feedback",
+                    "user_id": "student-17",
+                    "session_id": "session-a",
+                    "timestamp_utc": "2026-08-31T12:01:00Z",
+                    "per_question_interviews": "Helpful: Clear explanation.",
+                    "experience_with_robot": "Easy to use.",
+                    "satisfaction_1_know_how": 5,
+                    "trust_1_confident": 4,
+                }
+            )
+
+            self.assertTrue(workbook.is_file())
+            with zipfile.ZipFile(workbook) as archive:
+                summary = archive.read("xl/worksheets/sheet1.xml").decode()
+                interactions = archive.read("xl/worksheets/sheet2.xml").decode()
+
+            self.assertIn("Easy to use.", summary)
+            self.assertIn("Where did the robot go?", interactions)
+
+
 class DemographicRequestFlowTest(unittest.TestCase):
     @staticmethod
     def call_handler(application, method_name, payload, path=None):
@@ -536,6 +587,53 @@ class DemographicRequestFlowTest(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertEqual(resumed["answered_count"], 3)
             self.assertEqual(resumed["question"]["index"], 3)
+
+    def test_feedback_is_sent_to_the_excel_export_not_robot_db(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = create_session_database(
+                directory, "feedback_session", "running", 100
+            )
+            session = {
+                "session_id": "feedback_session",
+                "database": database,
+            }
+            store = server.ChatStore()
+            store.register_participant(session, "feedback-user")
+            answers = ["1997", "Woman", "Yes"] + ["3"] * 20
+            for index, answer in enumerate(answers):
+                store.save_demographic_answer(session, "feedback-user", index, answer)
+
+            export = mock.Mock()
+            application = server.ChatApplication(
+                locator=server.SessionLocator(
+                    runtime_dir=directory, fixed_session_id="feedback_session"
+                ),
+                store=store,
+                runner=object(),
+                user_testing_logger=export,
+            )
+            status, result = self.call_handler(
+                application,
+                "_handle_feedback",
+                {
+                    "user_id": "feedback-user",
+                    "interviews": [],
+                    "experience": "The robot was easy to use.",
+                    "other_feedback": "",
+                    "satisfaction_ratings": ["5"] * 7,
+                    "trust_ratings": ["4"] * 6,
+                },
+            )
+
+            self.assertEqual(status, 200)
+            self.assertTrue(result["saved"])
+            export.append.assert_called_once()
+            connection = sqlite3.connect(str(database))
+            feedback_table = connection.execute(
+                "SELECT name FROM sqlite_master WHERE name = 'ui_post_chat_feedback'"
+            ).fetchone()
+            connection.close()
+            self.assertIsNone(feedback_table)
 
 
 class UserFilteredStatusTest(unittest.TestCase):

@@ -80,6 +80,49 @@
     </section>
   </main>
 
+  <main id="feedbackScreen" class="onboarding-shell feedback-shell" hidden>
+    <section class="onboarding-card demographics-card" aria-labelledby="feedbackTitle">
+      <div class="onboarding-brand compact-brand">
+        <div class="robot-mark" aria-hidden="true">
+          <span class="robot-eye"></span>
+          <span class="robot-eye"></span>
+        </div>
+        <div>
+          <p class="eyebrow">Post-chat feedback</p>
+          <p class="onboarding-brand-name">QBot Evidence Console</p>
+        </div>
+        <span id="feedbackUserId" class="participant-badge"></span>
+      </div>
+
+      <div class="onboarding-copy feedback-copy">
+        <p class="step-label">End of session</p>
+        <h1 id="feedbackTitle">Tell us about your chat</h1>
+        <p>Your feedback helps us evaluate QBot's explanations. It will be saved with your User ID.</p>
+      </div>
+
+      <form id="feedbackForm" class="demographics-form">
+        <div id="feedbackInterviews" class="feedback-interviews"></div>
+        <label class="field-label feedback-comment-label" for="feedbackExperience">How would you describe your experience with the robot?</label>
+        <textarea id="feedbackExperience" class="onboarding-input" maxlength="2000" rows="4" required></textarea>
+        <label class="field-label feedback-comment-label" for="feedbackOther">Do you have any other questions or feedback? (optional)</label>
+        <textarea id="feedbackOther" class="onboarding-input" maxlength="2000" rows="4"></textarea>
+        <div class="feedback-scale-copy">
+          <h2>Explanation Satisfaction Scale</h2>
+          <p>Rate each statement from 1 (I disagree strongly) to 5 (I agree strongly).</p>
+        </div>
+        <div id="satisfactionScale" class="feedback-scale"></div>
+        <div class="feedback-scale-copy">
+          <h2>Explainable AI Trust Scale</h2>
+          <p>Rate each statement from 1 (I disagree strongly) to 5 (I agree strongly).</p>
+        </div>
+        <div id="trustScale" class="feedback-scale"></div>
+        <button id="feedbackSubmit" class="primary-action" type="submit">Submit feedback</button>
+      </form>
+      <div id="feedbackNotice" class="onboarding-notice" role="alert" hidden></div>
+      <p id="feedbackThanks" class="survey-help" hidden>Thank you. Your feedback has been saved.</p>
+    </section>
+  </main>
+
   <main id="chatScreen" class="app-shell" hidden>
     <header class="topbar">
       <div class="identity">
@@ -149,6 +192,7 @@
             <strong id="loggedInUserId">—</strong>
             <button id="switchUserButton" class="switch-user-button" type="button">Switch user</button>
           </div>
+          <button id="endChatButton" class="end-chat-button" type="button">End chat and give feedback</button>
 
           <label class="field-label field-spacing" for="audience">Answer style</label>
           <select id="audience" class="text-input">

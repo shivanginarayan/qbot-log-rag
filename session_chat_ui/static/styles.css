@@ -82,11 +82,21 @@ select {
 
 .onboarding-shell {
   width: 100%;
+  height: 100dvh;
   min-height: 100vh;
   display: grid;
   place-items: center;
   padding: 28px;
   overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.feedback-shell {
+  align-items: start;
+}
+
+.feedback-shell .onboarding-card {
+  margin: 28px 0;
 }
 
 .onboarding-card {
@@ -343,6 +353,83 @@ textarea.onboarding-input {
   margin-top: 20px;
 }
 
+.feedback-copy {
+  margin-bottom: 24px;
+}
+
+.feedback-comment-label {
+  display: block;
+  margin: 20px 0 8px;
+}
+
+.feedback-copy + .demographics-form legend {
+  margin-bottom: 16px;
+}
+
+.feedback-interviews,
+.feedback-scale {
+  display: grid;
+  gap: 22px;
+}
+
+.feedback-interview,
+.feedback-scale-question {
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(20, 38, 48, 0.38);
+}
+
+.feedback-interview h2,
+.feedback-scale-copy h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.feedback-interview-prompt,
+.feedback-interview-response,
+.feedback-scale-copy p {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.55;
+}
+
+.feedback-interview-response {
+  color: #c7dadd;
+}
+
+.feedback-interview .field-label {
+  display: block;
+  margin: 24px 0 10px;
+  color: #c7dadd;
+  line-height: 1.45;
+}
+
+.feedback-interview textarea.onboarding-input {
+  display: block;
+  width: 100%;
+  min-height: 88px;
+  margin: 0;
+  padding: 13px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 11px;
+  background: rgba(6, 15, 20, 0.78);
+  resize: vertical;
+}
+
+.feedback-scale-copy {
+  margin-top: 30px;
+}
+
+.feedback-scale-copy p {
+  margin-bottom: 16px;
+}
+
+.feedback-scale-question .likert-options {
+  margin-top: 14px;
+}
+
 .survey-help {
   margin: 16px 0 0;
   color: var(--subtle);
@@ -541,6 +628,28 @@ h1 {
 .switch-user-button:hover {
   border-color: rgba(57, 216, 208, 0.36);
   color: #d7f4f2;
+}
+
+.end-chat-button {
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 1px solid rgba(255, 184, 102, 0.35);
+  border-radius: 9px;
+  color: #ffe0b4;
+  background: rgba(255, 184, 102, 0.08);
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+
+.end-chat-button:hover {
+  border-color: rgba(255, 184, 102, 0.7);
+  background: rgba(255, 184, 102, 0.14);
+}
+
+.end-chat-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .session-card {
@@ -1150,6 +1259,7 @@ input::placeholder {
   .session-line strong { text-align: left; }
   .storage-note { display: none; }
   .field-label { display: none; }
+  .feedback-shell .field-label { display: block; }
   .field-spacing { margin-top: 0; }
   .text-input { height: 38px; }
   .api-key-form { margin-top: 0; }

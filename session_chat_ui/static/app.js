@@ -2,6 +2,7 @@
 
 const loginScreen = document.getElementById("loginScreen");
 const demographicsScreen = document.getElementById("demographicsScreen");
+const feedbackScreen = document.getElementById("feedbackScreen");
 const chatScreen = document.getElementById("chatScreen");
 const loginForm = document.getElementById("loginForm");
 const loginUserIdInput = document.getElementById("loginUserId");
@@ -15,6 +16,16 @@ const demographicAnswer = document.getElementById("demographicAnswer");
 const demographicSubmit = document.getElementById("demographicSubmit");
 const demographicNotice = document.getElementById("demographicNotice");
 const demographicUserId = document.getElementById("demographicUserId");
+const feedbackForm = document.getElementById("feedbackForm");
+const feedbackUserId = document.getElementById("feedbackUserId");
+const feedbackInterviews = document.getElementById("feedbackInterviews");
+const feedbackExperience = document.getElementById("feedbackExperience");
+const feedbackOther = document.getElementById("feedbackOther");
+const satisfactionScale = document.getElementById("satisfactionScale");
+const trustScale = document.getElementById("trustScale");
+const feedbackSubmit = document.getElementById("feedbackSubmit");
+const feedbackNotice = document.getElementById("feedbackNotice");
+const feedbackThanks = document.getElementById("feedbackThanks");
 const chatForm = document.getElementById("chatForm");
 const messages = document.getElementById("messages");
 const conversation = document.getElementById("conversation");
@@ -36,6 +47,7 @@ const mapName = document.getElementById("mapName");
 const storedCount = document.getElementById("storedCount");
 const loggedInUserId = document.getElementById("loggedInUserId");
 const switchUserButton = document.getElementById("switchUserButton");
+const endChatButton = document.getElementById("endChatButton");
 const systemToggle = document.getElementById("systemToggle");
 const systemStatus = document.getElementById("systemStatus");
 const systemStatusText = document.getElementById("systemStatusText");
@@ -60,6 +72,25 @@ let switchingTo = "";
 let fastStatusTimer = null;
 let statusInFlight = false;
 let systemEpoch = 0;
+let feedbackInteractions = [];
+
+const SATISFACTION_ITEMS = [
+  "From the explanation, I know how the robot works.",
+  "This explanation of how the robot works is satisfying.",
+  "This explanation of how the robot works has sufficient detail.",
+  "This explanation of how the robot works seems complete.",
+  "This explanation of how the robot works tells me how to use it.",
+  "This explanation of how the robot works is useful to my goals.",
+  "This explanation of the robot shows me how accurate the robot is.",
+];
+const TRUST_ITEMS = [
+  "I am confident in the robot. I feel that it works well.",
+  "The outputs of the robot are very predictable.",
+  "The tool is very reliable. I can count on it to be correct all the time.",
+  "I feel safe that when I rely on the robot I will get the right answers.",
+  "The robot is efficient in that it works very quickly.",
+  "I am wary of the robot.",
+];
 
 const emptyConversationMarkup = conversation.innerHTML;
 
@@ -71,6 +102,7 @@ function setInlineNotice(element, message) {
 function showScreen(screen) {
   loginScreen.hidden = screen !== loginScreen;
   demographicsScreen.hidden = screen !== demographicsScreen;
+  feedbackScreen.hidden = screen !== feedbackScreen;
   chatScreen.hidden = screen !== chatScreen;
 }
 
@@ -80,6 +112,8 @@ function setCurrentUser(userId) {
   loggedInUserId.textContent = cleanUserId || "—";
   demographicUserId.textContent = cleanUserId;
   demographicUserId.title = cleanUserId;
+  feedbackUserId.textContent = cleanUserId;
+  feedbackUserId.title = cleanUserId;
 }
 
 function renderDemographicQuestion(question) {
@@ -179,6 +213,7 @@ async function enterChat() {
   displayedHistorySystem = "";
   activeSystem = DEFAULT_SYSTEM;
   switchingTo = "";
+  feedbackInteractions = [];
 
   // Status first, so the system labels are known before history renders.
   await refreshStatus();
@@ -302,6 +337,162 @@ switchUserButton.addEventListener("click", () => {
   refreshStatus();
   loginUserIdInput.focus();
 });
+
+endChatButton.addEventListener("click", () => {
+  if (requestInProgress || switchingTo) {
+    setNotice("Wait for the current QBot response before ending the chat.");
+    return;
+  }
+
+  feedbackForm.hidden = false;
+  feedbackForm.reset();
+  renderFeedbackForm();
+  feedbackSubmit.disabled = false;
+  feedbackThanks.hidden = true;
+  setInlineNotice(feedbackNotice, "");
+  showScreen(feedbackScreen);
+  feedbackScreen.querySelector("textarea, input").focus();
+});
+
+feedbackForm.addEventListener("change", (event) => {
+  if (!event.target.matches('input[type="radio"]')) return;
+  const options = event.target.closest(".likert-options");
+  options.querySelectorAll(".likert-option").forEach((option) => {
+    option.classList.toggle("selected", option.querySelector("input").checked);
+  });
+});
+
+feedbackForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const scales = [...feedbackForm.querySelectorAll(".feedback-scale-question")];
+  const ratings = scales.map((question) => question.querySelector(":checked"));
+  if (ratings.some((rating) => !rating)) {
+    setInlineNotice(feedbackNotice, "Answer every scale statement before submitting.");
+    return;
+  }
+
+  const interviews = feedbackInteractions.map((entry, index) => ({
+    request_id: entry.request_id,
+    hoped_to_clarify: feedbackForm.elements[`clarify_${index}`].value.trim(),
+    helpful: feedbackForm.elements[`helpful_${index}`].value.trim(),
+    unclear: feedbackForm.elements[`unclear_${index}`].value.trim(),
+    missing: feedbackForm.elements[`missing_${index}`].value.trim(),
+  }));
+
+  feedbackSubmit.disabled = true;
+  setInlineNotice(feedbackNotice, "");
+
+  try {
+    const response = await fetch("/api/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+      body: JSON.stringify({
+        user_id: userIdInput.value,
+        interviews,
+        experience: feedbackExperience.value.trim(),
+        other_feedback: feedbackOther.value.trim(),
+        satisfaction_ratings: ratings.slice(0, SATISFACTION_ITEMS.length).map((item) => item.value),
+        trust_ratings: ratings.slice(SATISFACTION_ITEMS.length).map((item) => item.value),
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "The feedback could not be saved.");
+    }
+
+    feedbackThanks.hidden = false;
+    feedbackForm.hidden = true;
+  } catch (error) {
+    setInlineNotice(
+      feedbackNotice,
+      error.message || "The feedback could not be saved.",
+    );
+    feedbackSubmit.disabled = false;
+  }
+});
+
+function mergeFeedbackInteractions(entries) {
+  const currentSession = sessionId.textContent.trim();
+  entries.forEach((entry) => {
+    if (!entry.request_id || entry.session_id !== currentSession) return;
+    if (!feedbackInteractions.some((item) => item.request_id === entry.request_id)) {
+      feedbackInteractions.push(entry);
+    }
+  });
+}
+
+function addFeedbackTextField(parent, labelText, name, required) {
+  const label = document.createElement("label");
+  label.className = "field-label";
+  label.htmlFor = name;
+  label.textContent = labelText;
+  const input = document.createElement("textarea");
+  input.id = name;
+  input.name = name;
+  input.className = "onboarding-input";
+  input.rows = 3;
+  input.maxLength = 2000;
+  input.required = required;
+  parent.append(label, input);
+}
+
+function renderScaleQuestion(container, name, text) {
+  const question = document.createElement("fieldset");
+  question.className = "feedback-scale-question";
+  const legend = document.createElement("legend");
+  legend.textContent = text;
+  const options = document.createElement("div");
+  options.className = "likert-options";
+  options.setAttribute("role", "radiogroup");
+  for (let value = 1; value <= 5; value += 1) {
+    const label = document.createElement("label");
+    label.className = "likert-option";
+    const input = document.createElement("input");
+    input.type = "radio";
+    input.name = name;
+    input.value = String(value);
+    input.required = true;
+    const number = document.createElement("span");
+    number.textContent = String(value);
+    label.append(input, number);
+    options.appendChild(label);
+  }
+  question.append(legend, options);
+  container.appendChild(question);
+}
+
+function renderFeedbackForm() {
+  feedbackInterviews.replaceChildren();
+  if (feedbackInteractions.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "survey-help";
+    empty.textContent = "No completed QBot responses were found in this session.";
+    feedbackInterviews.appendChild(empty);
+  }
+  feedbackInteractions.forEach((entry, index) => {
+    const interview = document.createElement("section");
+    interview.className = "feedback-interview";
+    const title = document.createElement("h2");
+    title.textContent = `Question ${index + 1}`;
+    const prompt = document.createElement("p");
+    prompt.className = "feedback-interview-prompt";
+    prompt.textContent = `You asked: ${entry.question}`;
+    const response = document.createElement("p");
+    response.className = "feedback-interview-response";
+    response.textContent = `QBot responded: ${entry.robot_response}`;
+    interview.append(title, prompt, response);
+    addFeedbackTextField(interview, "What were you hoping to clarify with that question?", `clarify_${index}`, true);
+    addFeedbackTextField(interview, "What was particularly helpful about the response?", `helpful_${index}`, true);
+    addFeedbackTextField(interview, "What was unclear about the response?", `unclear_${index}`, true);
+    addFeedbackTextField(interview, "What information was still missing?", `missing_${index}`, true);
+    feedbackInterviews.appendChild(interview);
+  });
+  satisfactionScale.replaceChildren();
+  trustScale.replaceChildren();
+  SATISFACTION_ITEMS.forEach((item, index) => renderScaleQuestion(satisfactionScale, `satisfaction_${index}`, item));
+  TRUST_ITEMS.forEach((item, index) => renderScaleQuestion(trustScale, `trust_${index}`, item));
+}
 
 function setNotice(message) {
   notice.textContent = message || "";
@@ -449,6 +640,7 @@ function updateComposerLock() {
   sendButton.disabled = locked;
   questionInput.disabled = switching;
   switchUserButton.disabled = locked;
+  endChatButton.disabled = locked;
   audienceInput.disabled = locked || (entry ? entry.uses_audience === false : false);
 }
 
@@ -715,6 +907,7 @@ async function loadChatHistory(userId, system) {
     const interactions = Array.isArray(data.interactions)
       ? data.interactions
       : [];
+    mergeFeedbackInteractions(interactions);
 
     conversation.replaceChildren();
 
@@ -1001,6 +1194,14 @@ chatForm.addEventListener("submit", async (event) => {
       ? `${answeringSystem} · ${Math.max(0, Math.round((data.response_time_ms || 0) / 100) / 10)}s · saved`
       : `${answeringSystem} · request error`;
     addMessage(responseText, "assistant", meta, !response.ok);
+    if (data.request_id) {
+      mergeFeedbackInteractions([{
+        request_id: data.request_id,
+        session_id: data.session_id,
+        question,
+        robot_response: responseText,
+      }]);
+    }
 
     if (data.error && data.answer && data.error !== data.answer) {
       setNotice(data.error);
