@@ -3,12 +3,17 @@
 import json
 import os
 import subprocess
+import sys
+from pathlib import Path
+
+REPO_DIR = Path(__file__).resolve().parents[2]
+if str(REPO_DIR) not in sys.path:
+    sys.path.insert(0, str(REPO_DIR))
+
+from ros_domain_config import get_ros_domain_id
 
 
-ROS_DOMAIN_ID = os.environ.get(
-    "ROS_DOMAIN_ID",
-    "57",
-)
+ROS_DOMAIN_ID = str(get_ros_domain_id())
 
 
 def run_ros2(

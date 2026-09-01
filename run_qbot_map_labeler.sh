@@ -3,12 +3,13 @@
 set -eo pipefail
 
 LABELER_REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$LABELER_REPO_DIR/ros_domain_constants.sh"
 LABELER_NAV_DIR="$LABELER_REPO_DIR/robot_navigation"
 LABELER_QBOT_SETUP="$HOME/ros2/install/setup.bash"
 LABELER_HOST="${QBOT_LABELER_HOST:-0.0.0.0}"
 LABELER_PORT="${QBOT_LABELER_PORT:-8765}"
 
-export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-63}"
+export ROS_DOMAIN_ID="$QBOT_ROS_DOMAIN_ID"
 
 if [ ! -f /opt/ros/humble/setup.bash ]; then
     echo "ERROR: ROS Humble setup not found: /opt/ros/humble/setup.bash"

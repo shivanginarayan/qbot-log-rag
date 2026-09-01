@@ -10,6 +10,7 @@ fi
 SESSION_ID="$1"
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$REPO_DIR/ros_domain_constants.sh"
 SESSION_DIR="$REPO_DIR/runtime_logs/session_${SESSION_ID}"
 DB_PATH="$SESSION_DIR/robot.db"
 BAG_DIR="$SESSION_DIR/rosbag"
@@ -47,7 +48,7 @@ if [ -f "$REPO_DIR/.venv/bin/activate" ]; then
     source "$REPO_DIR/.venv/bin/activate"
 fi
 
-export ROS_DOMAIN_ID=63
+export ROS_DOMAIN_ID="$QBOT_ROS_DOMAIN_ID"
 
 cd "$REPO_DIR"
 

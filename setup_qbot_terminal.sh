@@ -10,6 +10,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
 fi
 
 QBOT_ENV_REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$QBOT_ENV_REPO_DIR/ros_domain_constants.sh"
 QBOT_ENV_NAV_DIR="$QBOT_ENV_REPO_DIR/robot_navigation"
 QBOT_ENV_DRIVER_SETUP="$HOME/ros2/install/setup.bash"
 
@@ -29,7 +30,7 @@ if [ ! -f "$QBOT_ENV_NAV_DIR/install/setup.bash" ]; then
     return 1
 fi
 
-export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-63}"
+export ROS_DOMAIN_ID="$QBOT_ROS_DOMAIN_ID"
 source /opt/ros/humble/setup.bash
 source "$QBOT_ENV_DRIVER_SETUP"
 source "$QBOT_ENV_NAV_DIR/install/setup.bash"

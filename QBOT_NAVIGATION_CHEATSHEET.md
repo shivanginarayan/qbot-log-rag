@@ -1,7 +1,7 @@
 # QBot Navigation Cheat Sheet
 
-Commands below assume the repository is located at `~/qbot-log-rag` and ROS
-uses domain ID `63`.
+Commands below assume the repository is located at `~/qbot-log-rag` and use
+the shared ROS domain configuration in `ros_domain_constants.sh`.
 
 ## Start the Website and Navigation
 
@@ -33,7 +33,7 @@ displayed map does not reload Nav2; while the maps differ, the page disables
 Go, Localize, and the live pose marker and shows both map names.
 
 Use **Rebuild** after changing package source, configuration, or launch files.
-All website-managed commands use `ROS_DOMAIN_ID=39`.
+All website-managed commands use the shared `ROS_DOMAIN_ID`.
 
 The Nav2 costmaps retain the QBot's `0.35 m` physical collision radius. Their
 soft inflation radii are `0.50 m` locally and `0.65 m` globally, allowing more
@@ -184,7 +184,8 @@ For manual troubleshooting only, the shell entrypoint now requires a map:
 
 ```bash
 cd ~/qbot-log-rag
-export ROS_DOMAIN_ID=39
+source ./ros_domain_constants.sh
+export ROS_DOMAIN_ID="$QBOT_ROS_DOMAIN_ID"
 source /opt/ros/humble/setup.bash
 source "$HOME/ros2/install/setup.bash"
 source "$PWD/robot_navigation/install/setup.bash"
@@ -429,7 +430,8 @@ live pose and lidar alignment match the map.
 RViz requires a graphical display. On a graphical ROS machine:
 
 ```bash
-export ROS_DOMAIN_ID=39
+source ./ros_domain_constants.sh
+export ROS_DOMAIN_ID="$QBOT_ROS_DOMAIN_ID"
 rviz2
 ```
 

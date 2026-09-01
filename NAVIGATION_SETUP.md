@@ -20,9 +20,10 @@ Log-analysis repository:
 
 ~/ENGR857_Narayan_Shivangi/project/qbot-log-rag
 
-All navigation and localization testing uses:
+All navigation and localization testing uses the shared configuration:
 
-export ROS_DOMAIN_ID=39
+source ./ros_domain_constants.sh
+export ROS_DOMAIN_ID="$QBOT_ROS_DOMAIN_ID"
 
 This prevents the navigation system from interacting with unrelated
 QBot ROS2 nodes running on other domains.
@@ -179,7 +180,7 @@ From the project repository, start the browser controller:
 ./run_qbot_map_labeler.sh
 
 Select the desired map in the website and press Start Navigation. The website
-uses ROS_DOMAIN_ID=39, saves the matching labels JSON, builds if necessary,
+uses the shared ROS domain ID, saves the matching labels JSON, builds if necessary,
 starts the filtered-LiDAR Nav2 stack, and notifies the page when it is ready.
 Use Stop Navigation before starting a different selected map. Build and launch
 logs remain in the terminal that runs the website.
@@ -190,7 +191,7 @@ The same website can create a new Cartographer map without opening additional
 terminals. Stop Navigation, press New Map, and reserve a unique map name. The
 website starts the QBot driver, filtered LiDAR, wheel odometry, Cartographer,
 the occupancy-grid publisher, and the physical gamepad command node on
-ROS_DOMAIN_ID=39.
+the shared ROS domain ID.
 
 Hold LB on the gamepad to enable motion and release LB to stop. A scaled live
 /map preview updates in the browser about once per second. This preview is

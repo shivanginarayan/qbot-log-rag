@@ -3,6 +3,7 @@
 set -eo pipefail
 
 MAPPING_REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$MAPPING_REPO_DIR/ros_domain_constants.sh"
 MAPPING_NAV_DIR="$MAPPING_REPO_DIR/robot_navigation"
 MAPPING_QBOT_SETUP="$HOME/ros2/install/setup.bash"
 MAPPING_SCAN_FILTER="$MAPPING_NAV_DIR/filters/scan_wedge_filter.json"
@@ -85,7 +86,7 @@ if [ ! -f "$MAPPING_SCAN_FILTER" ]; then
 fi
 
 MAPPING_SCAN_FILTER="$(realpath "$MAPPING_SCAN_FILTER")"
-export ROS_DOMAIN_ID=39
+export ROS_DOMAIN_ID="$QBOT_ROS_DOMAIN_ID"
 
 source /opt/ros/humble/setup.bash
 source "$MAPPING_QBOT_SETUP"

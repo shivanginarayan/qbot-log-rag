@@ -2,13 +2,14 @@
 set -euo pipefail
 
 REPO_DIR="$HOME/ENGR857_Narayan_Shivangi/project/qbot-log-rag"
+source "$REPO_DIR/ros_domain_constants.sh"
 cd "$REPO_DIR"
 
 if [ -f ".venv/bin/activate" ]; then
     source .venv/bin/activate
 fi
 
-export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-57}"
+export ROS_DOMAIN_ID="$QBOT_ROS_DOMAIN_ID"
 
 echo
 echo "============================================================"
