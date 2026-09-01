@@ -2565,12 +2565,22 @@ class ChatRequestHandler(BaseHTTPRequestHandler):
             if len(interactions) != len(request_ids):
                 raise ValueError("One or more chat questions could not be found.")
             per_question_interviews = []
+            structured_interviews = []
             for interaction, answers in zip(interactions, interview_responses):
                 per_question_interviews.append(
                     "Question: {question}\nResponse: {response}\nHoped to clarify: {clarify}\nHelpful: {helpful}\nUnclear: {unclear}\nMissing: {missing}".format(
                         question=interaction["question"], response=interaction["robot_response"],
                         clarify=answers[0], helpful=answers[1], unclear=answers[2], missing=answers[3],
                     )
+                )
+                structured_interviews.append(
+                    {
+                        "request_id": str(interaction["request_id"]),
+                        "hoped_to_clarify": answers[0],
+                        "helpful": answers[1],
+                        "unclear": answers[2],
+                        "missing": answers[3],
+                    }
                 )
             logger.append(
                 {
@@ -2579,6 +2589,7 @@ class ChatRequestHandler(BaseHTTPRequestHandler):
                     "session_id": session["session_id"],
                     "timestamp_utc": utc_now()[1],
                     "per_question_interviews": "\n\n".join(per_question_interviews),
+                    "interviews": structured_interviews,
                     "experience_with_robot": experience,
                     "other_feedback": other_feedback,
                     **{

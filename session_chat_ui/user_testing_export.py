@@ -1,11 +1,59 @@
 """Dependency-free multi-sheet Excel export for user testing."""
-import json, os, tempfile, threading, zipfile
+import json, os, re, tempfile, threading, zipfile
 from pathlib import Path
 from xml.sax.saxutils import escape
 
 POST = (("How would you describe your experience with the robot?","experience_with_robot"),("Do you have any other questions or feedback?","other_feedback"),("From the explanation, I know how the robot works.","satisfaction_1_know_how"),("This explanation of how the robot works is satisfying.","satisfaction_2_satisfying"),("This explanation of how the robot works has sufficient detail.","satisfaction_3_sufficient_detail"),("This explanation of how the robot works seems complete.","satisfaction_4_complete"),("This explanation of how the robot works tells me how to use it.","satisfaction_5_how_to_use"),("This explanation of how the robot works is useful to my goals.","satisfaction_6_useful_to_goals"),("This explanation of the robot shows me how accurate the robot is.","satisfaction_7_accuracy"),("I am confident in the robot. I feel that it works well.","trust_1_confident"),("The outputs of the robot are very predictable.","trust_2_predictable"),("The tool is very reliable. I can count on it to be correct all the time.","trust_3_reliable"),("I feel safe that when I rely on the robot I will get the right answers.","trust_4_safe"),("The robot is efficient in that it works very quickly.","trust_5_efficient"),("I am wary of the robot.","trust_6_wary"))
 CHAT = (("User ID","user_id"),("Timestamp (UTC)","timestamp_utc"),("Session ID","session_id"),("Displayed system","system_slot"),("Backend system","backend_system"),("Question","question"),("Robot response","robot_response"),("Chat status","chat_status"),("What were you hoping to clarify with that question?","hoped_to_clarify"),("What was particularly helpful about the response?","helpful"),("What was unclear about the response?","unclear"),("What information was still missing?","missing"))
 PRE = (("User ID","user_id"),("Timestamp (UTC)","timestamp_utc"),("Session ID","session_id"),("Question","question"),("Answer","answer"))
+INTERVIEW_FIELDS = ("hoped_to_clarify", "helpful", "unclear", "missing")
+LEGACY_INTERVIEW_PATTERN = re.compile(
+ r"(?:\A|\n\n)Question: (?P<question>.*?)\n"
+ r"Response: (?P<robot_response>.*?)\n"
+ r"Hoped to clarify: (?P<hoped_to_clarify>.*?)\n"
+ r"Helpful: (?P<helpful>.*?)\n"
+ r"Unclear: (?P<unclear>.*?)\n"
+ r"Missing: (?P<missing>.*?)(?=\n\nQuestion: |\Z)",
+ re.DOTALL,
+)
+
+
+def legacy_interviews(record, chats):
+ """Recover structured interview answers from older combined-text records."""
+ text = record.get("per_question_interviews", "")
+ if not isinstance(text, str) or not text:
+  return []
+
+ user_id = str(record.get("user_id", ""))
+ session_id = str(record.get("session_id", ""))
+ matched_request_ids = set()
+ interviews = []
+ for match in LEGACY_INTERVIEW_PATTERN.finditer(text):
+  values = match.groupdict()
+  request_id = next(
+   (
+    candidate_id
+    for candidate_id, chat in chats.items()
+    if candidate_id not in matched_request_ids
+    and str(chat.get("user_id", "")) == user_id
+    and str(chat.get("session_id", "")) == session_id
+    and str(chat.get("question", "")) == values["question"]
+    and str(chat.get("robot_response", "")) == values["robot_response"]
+   ),
+   None,
+  )
+  if request_id is None:
+   continue
+  matched_request_ids.add(request_id)
+  interviews.append(
+   {
+    "request_id": request_id,
+    **{field: values[field] for field in INTERVIEW_FIELDS},
+   }
+  )
+ return interviews
+
+
 def col(n):
  s=""
  while n:n,r=divmod(n-1,26);s=chr(65+r)+s
@@ -30,6 +78,10 @@ class UserTestingExcelLogger:
  def build(self):
   rec=self.records();users={};chats={};order=[];pre_rows=[]
   for x in rec:
+   if x.get("event_type")=="chat" and x.get("request_id"):
+    request_id=str(x["request_id"])
+    chats[request_id]=dict(x);order.append(request_id)
+  for x in rec:
    u=str(x.get("user_id",""));
    if not u:continue
    row=users.setdefault(u,{"User ID":u});row["Timestamp (UTC)"]=x.get("timestamp_utc","");row["Session ID"]=x.get("session_id","")
@@ -48,10 +100,16 @@ class UserTestingExcelLogger:
       if i<len(self.questions):row[self.questions[i]]=answer
    if x.get("event_type")=="post_chat_feedback":
     for _,k in POST:row[k]=x.get(k,"")
-    for a in x.get("interviews",[]):
-     if a.get("request_id") in chats:chats[a["request_id"]].update(a)
-   if x.get("event_type")=="chat" and x.get("request_id"):
-    chats[x["request_id"]]=x;order.append(x["request_id"])
+    interviews=x.get("interviews",[])
+    if not isinstance(interviews,list) or not interviews:
+     interviews=legacy_interviews(x,chats)
+    for a in interviews:
+     if not isinstance(a,dict):continue
+     request_id=str(a.get("request_id",""))
+     chat=chats.get(request_id)
+     if chat is None:continue
+     if str(chat.get("user_id",""))!=u or str(chat.get("session_id",""))!=str(x.get("session_id","")):continue
+     for field in INTERVIEW_FIELDS:chat[field]=a.get(field,"")
   sh1=("User ID","Timestamp (UTC)","Session ID")+self.questions+tuple(h for h,_ in POST)
   for row in users.values():
    for h,k in POST:row[h]=row.pop(k,"")
