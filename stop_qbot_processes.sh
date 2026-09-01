@@ -56,11 +56,8 @@ PATTERNS=(
     'qbot_platform_manual_map_launch\.py'
     'qbot_platform_manual_drive_launch\.py'
     'go_to_label\.py'
-<<<<<<< HEAD
     'manual_assistance\.py'
     'cmd_vel_arbiter\.py'
-=======
->>>>>>> 4bac8506ff2599764401270175088b8d7fe35072
     'breadcrumb_return\.py'
     'map_saver_cli'
     'cartographer_node'
@@ -119,7 +116,6 @@ add_candidate() {
     N_CANDIDATES=$((N_CANDIDATES + 1))
 }
 
-<<<<<<< HEAD
 stop_driver_model() {
     command -v quarc_run >/dev/null 2>&1 || return 0
     if quarc_run -q -t tcpip://localhost:17000 qbot_platform_driver_physical \
@@ -131,8 +127,6 @@ stop_driver_model() {
     fi
 }
 
-=======
->>>>>>> 4bac8506ff2599764401270175088b8d7fe35072
 # 1. Pattern matches owned by this user.
 while read -r pid ppid pgid euid etime cmd; do
     [ -n "${cmd:-}" ] || continue
@@ -170,14 +164,11 @@ done < <(port_holders)
 
 if [ "$N_CANDIDATES" -eq 0 ]; then
     echo "Nothing to stop - no QBot processes running and port $PORT is free."
-<<<<<<< HEAD
     if [ "$DRY_RUN" -eq 1 ]; then
         echo "Dry run - would also request a clean QUARC driver-model stop."
     else
         stop_driver_model
     fi
-=======
->>>>>>> 4bac8506ff2599764401270175088b8d7fe35072
     exit 0
 fi
 
@@ -287,13 +278,10 @@ if [ -n "$(port_holders)" ]; then
     failed=1
 fi
 
-<<<<<<< HEAD
 # The real-time driver model can outlive a failed launch process. Explicitly
 # stop it so the next navigation or mapping startup can download a clean copy.
 stop_driver_model
 
-=======
->>>>>>> 4bac8506ff2599764401270175088b8d7fe35072
 if [ "$failed" -eq 0 ]; then
     echo "All clear - QBot processes stopped and port $PORT is free."
 fi
