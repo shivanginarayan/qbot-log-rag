@@ -125,7 +125,10 @@ class LidarLogger(Node):
         self.session_id = session_id
         self.topic = topic
 
-        self.conn = sqlite3.connect(self.db_path)
+        self.conn = sqlite3.connect(self.db_path, timeout=30)
+        self.conn.execute("PRAGMA journal_mode = WAL")
+        self.conn.execute("PRAGMA busy_timeout = 30000")
+        self.conn.execute("PRAGMA foreign_keys = ON")
 
         self.current_summary = None
         self.current_interval_id = None

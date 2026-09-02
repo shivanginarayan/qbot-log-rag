@@ -3,6 +3,9 @@ import sqlite3
 
 def initialize_database(db_path):
     conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 30000")
+    conn.execute("PRAGMA foreign_keys = ON")
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
@@ -274,7 +277,47 @@ def initialize_database(db_path):
     )
 
     conn.execute(
+            """
+        CREATE TABLE IF NOT EXISTS system_samples (
+            system_sample_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+
+            event_time_ns INTEGER NOT NULL,
+
+            category TEXT NOT NULL,
+
+            metric_name TEXT NOT NULL,
+
+            value_numeric REAL,
+
+            value_text TEXT,
+
+            unit TEXT,
+
+            source TEXT,
+
+            payload_json TEXT,
+
+            FOREIGN KEY(session_id) REFERENCES sessions(session_id)
+        )
         """
+    )
+
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_system_samples_metric_time
+        ON system_samples(metric_name, event_time_ns)
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_system_samples_category_time
+        ON system_samples(category, event_time_ns)
+        """
+    )
+
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_task_events_session_time
         ON task_events(session_id, event_time_ns)
         """

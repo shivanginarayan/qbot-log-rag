@@ -23,7 +23,10 @@ class OdomLogger(Node):
         self.db_path = db_path
         self.session_id = session_id
 
-        self.conn = sqlite3.connect(self.db_path)
+        self.conn = sqlite3.connect(self.db_path, timeout=30)
+        self.conn.execute("PRAGMA journal_mode = WAL")
+        self.conn.execute("PRAGMA busy_timeout = 30000")
+        self.conn.execute("PRAGMA foreign_keys = ON")
 
         self.subscription = self.create_subscription(
             Odometry,

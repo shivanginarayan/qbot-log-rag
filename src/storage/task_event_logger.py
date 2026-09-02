@@ -20,7 +20,11 @@ class TaskEventLogger(Node):
         self.conn = sqlite3.connect(
             self.db_path,
             check_same_thread=False,
+            timeout=30,
         )
+        self.conn.execute("PRAGMA journal_mode = WAL")
+        self.conn.execute("PRAGMA busy_timeout = 30000")
+        self.conn.execute("PRAGMA foreign_keys = ON")
 
         self.label_sub = self.create_subscription(
             String,

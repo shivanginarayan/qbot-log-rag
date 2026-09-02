@@ -59,6 +59,10 @@ ros2 bag record \
     /cmd_vel \
     /tf \
     /tf_static \
+    /rosout \
+    /qbot_battery \
+    /qbot_speed_feedback \
+    /qbot_joint \
     /controller/lb_held \
     /cmd_vel_teleop \
     /cmd_vel_behavior \

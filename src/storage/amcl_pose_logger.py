@@ -30,7 +30,10 @@ class AmclPoseLogger(Node):
         self.db_path = db_path
         self.session_id = session_id
 
-        self.conn = sqlite3.connect(self.db_path)
+        self.conn = sqlite3.connect(self.db_path, timeout=30)
+        self.conn.execute("PRAGMA journal_mode = WAL")
+        self.conn.execute("PRAGMA busy_timeout = 30000")
+        self.conn.execute("PRAGMA foreign_keys = ON")
 
         pose_qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
@@ -59,7 +62,8 @@ class AmclPoseLogger(Node):
             msg.header.stamp.sec * 1_000_000_000
             + msg.header.stamp.nanosec
         )
-        message_age_ns = received_at_ns - ros_time_ns
+        ros_now_ns = self.get_clock().now().nanoseconds
+        message_age_ns = ros_now_ns - ros_time_ns
 
         STALE_THRESHOLD_NS = 1_000_000_000  # 1 second
 

@@ -551,6 +551,56 @@ def summarize_amcl(
     return result
 
 
+def summarize_system_samples(
+    conn,
+    start_ns,
+    end_ns,
+):
+    if not table_exists(conn, "system_samples"):
+        return None
+
+    rows = conn.execute(
+        """
+        SELECT
+            event_time_ns,
+            category,
+            metric_name,
+            value_numeric,
+            value_text,
+            unit,
+            source,
+            payload_json
+        FROM system_samples
+        WHERE event_time_ns >= ?
+          AND event_time_ns <= ?
+        ORDER BY event_time_ns
+        """,
+        (start_ns, end_ns),
+    ).fetchall()
+
+    latest = {}
+    for row in rows:
+        latest[row[2]] = {
+            "event_time_ns": row[0],
+            "category": row[1],
+            "value_numeric": row[3],
+            "value_text": row[4],
+            "unit": row[5],
+            "source": row[6],
+        }
+
+        if row[7]:
+            try:
+                latest[row[2]]["payload"] = json.loads(row[7])
+            except Exception:
+                latest[row[2]]["payload_raw"] = row[7]
+
+    return {
+        "sample_count": len(rows),
+        "latest": latest,
+    }
+
+
 def build_packet(
     session_id,
     start_ns,
@@ -620,6 +670,13 @@ def build_packet(
 
         "localization":
             summarize_amcl(
+                conn,
+                start_ns,
+                end_ns,
+            ),
+
+        "system_samples":
+            summarize_system_samples(
                 conn,
                 start_ns,
                 end_ns,

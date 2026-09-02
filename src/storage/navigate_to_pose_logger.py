@@ -103,8 +103,12 @@ class NavigateToPoseLogger(Node):
         self.frame_id = frame_id
 
         self.conn = sqlite3.connect(
-            self.db_path
+            self.db_path,
+            timeout=30,
         )
+        self.conn.execute("PRAGMA journal_mode = WAL")
+        self.conn.execute("PRAGMA busy_timeout = 30000")
+        self.conn.execute("PRAGMA foreign_keys = ON")
 
         self.action_client = ActionClient(
             self,

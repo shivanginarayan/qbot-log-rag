@@ -62,8 +62,17 @@ echo "Press Ctrl+C once to stop all loggers."
 echo
 
 PIDS=()
+CLEANED_UP=0
 
 cleanup() {
+    exit_status=$?
+
+    if [ "$CLEANED_UP" -eq 1 ]; then
+        return
+    fi
+
+    CLEANED_UP=1
+
     echo
     echo "Stopping evidence loggers..."
 
@@ -74,6 +83,34 @@ cleanup() {
     done
 
     wait || true
+
+    session_status="completed"
+    if [ "$exit_status" -ne 0 ]; then
+        session_status="interrupted"
+    fi
+
+    python - "$DB_PATH" "$SESSION_ID" "$session_status" <<'PY'
+import sqlite3
+import sys
+import time
+
+db_path, session_id, status = sys.argv[1:]
+connection = sqlite3.connect(db_path, timeout=30)
+connection.execute("PRAGMA busy_timeout = 30000")
+connection.execute(
+    """
+    UPDATE sessions
+    SET ended_at_ns = ?,
+        ended_at_iso = datetime('now'),
+        status = ?
+    WHERE session_id = ?
+      AND ended_at_ns IS NULL
+    """,
+    (time.time_ns(), status, session_id),
+)
+connection.commit()
+connection.close()
+PY
 
     echo "All evidence loggers stopped."
 }
@@ -106,6 +143,11 @@ python src/storage/task_event_logger.py \
     --session-id "$SESSION_ID" &
 PIDS+=($!)
 
+python src/storage/system_samples_logger.py \
+    --db "$DB_PATH" \
+    --session-id "$SESSION_ID" &
+PIDS+=($!)
+
 ros2 bag record \
     -o "$BAG_DIR" \
     /scan \
@@ -115,6 +157,10 @@ ros2 bag record \
     /cmd_vel \
     /tf \
     /tf_static \
+    /rosout \
+    /qbot_battery \
+    /qbot_speed_feedback \
+    /qbot_joint \
     /label \
     /robot/navigation_status \
     /controller/lb_held \
@@ -125,4 +171,12 @@ ros2 bag record \
     /robot/manual_assistance_status &
 PIDS+=($!)
 
-wait
+while true; do
+    for pid in "${PIDS[@]}"; do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            wait "$pid"
+            exit $?
+        fi
+    done
+    sleep 1
+done
