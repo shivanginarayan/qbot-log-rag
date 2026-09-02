@@ -3,6 +3,9 @@
 import json
 import os
 import sqlite3
+import re
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -451,6 +454,9 @@ Available event fields:
 - session_id
 - event_time_ns
 
+Time ranges should be returned when the question asks for one. Use UTC
+nanoseconds in `time_range.start_ns` and `time_range.end_ns`.
+
 Important recorded event types include:
 
 LOCALIZE_COMMAND
@@ -567,6 +573,10 @@ Return exactly:
     "maps": [],
     "labels": [],
     "statuses": []
+  },
+  "time_range": {
+    "start_ns": null,
+    "end_ns": null
   },
   "group_by": null,
   "limit": 20
@@ -843,11 +853,100 @@ def sanitize_plan(
                 ),
         },
 
+        "time_range": sanitize_time_range(
+            plan.get("time_range")
+        ),
+
         "group_by":
             group_by,
 
         "limit":
             limit,
+    }
+
+
+def sanitize_time_range(value):
+    if not isinstance(value, dict):
+        return {
+            "start_ns": None,
+            "end_ns": None,
+        }
+
+    result = {}
+    for name in ("start_ns", "end_ns"):
+        try:
+            result[name] = int(value[name]) if value.get(name) is not None else None
+        except (TypeError, ValueError):
+            result[name] = None
+
+    if (
+        result["start_ns"] is not None
+        and result["end_ns"] is not None
+        and result["start_ns"] > result["end_ns"]
+    ):
+        return {"start_ns": None, "end_ns": None}
+
+    return result
+
+
+def infer_time_range(question, now_ns=None):
+    """Infer only explicit, simple date ranges from the user's wording."""
+    text = str(question or "").casefold()
+    now_ns = time.time_ns() if now_ns is None else int(now_ns)
+
+    number_words = {
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "six": 6,
+        "seven": 7,
+        "eight": 8,
+        "nine": 9,
+        "ten": 10,
+    }
+
+    amount_pattern = r"(\d+|" + "|".join(number_words) + r")"
+    relative = re.search(
+        r"(?:last|past|previous)\s+" + amount_pattern + r"\s+days?",
+        text,
+    )
+    if relative:
+        raw_amount = relative.group(1)
+        days = int(raw_amount) if raw_amount.isdigit() else number_words[raw_amount]
+        return {
+            "start_ns": now_ns - days * 86_400_000_000_000,
+            "end_ns": now_ns,
+        }
+
+    if re.search(r"(?:last|past|previous)\s+week", text):
+        return {
+            "start_ns": now_ns - 7 * 86_400_000_000_000,
+            "end_ns": now_ns,
+        }
+
+    dates = re.findall(r"\b\d{4}-\d{2}-\d{2}\b", text)
+    if len(dates) >= 2:
+        start = datetime.strptime(dates[0], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        end = datetime.strptime(dates[1], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        end += timedelta(days=1)
+        return {
+            "start_ns": int(start.timestamp() * 1e9),
+            "end_ns": int(end.timestamp() * 1e9) - 1,
+        }
+
+    if len(dates) == 1:
+        start = datetime.strptime(dates[0], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        end = start + timedelta(days=1)
+        return {
+            "start_ns": int(start.timestamp() * 1e9),
+            "end_ns": int(end.timestamp() * 1e9),
+        }
+
+    return {
+        "start_ns": None,
+        "end_ns": None,
     }
 
 
@@ -922,6 +1021,15 @@ def filter_events(
     result = []
 
     for event in events:
+
+        time_range = plan.get("time_range") or {}
+        event_time_ns = event.get("event_time_ns")
+        if time_range.get("start_ns") is not None:
+            if event_time_ns is None or event_time_ns < time_range["start_ns"]:
+                continue
+        if time_range.get("end_ns") is not None:
+            if event_time_ns is None or event_time_ns > time_range["end_ns"]:
+                continue
 
         if (
             plan.get(
@@ -1031,6 +1139,11 @@ def compact_event(
                 "event_type"
             ),
 
+        "source_topic":
+            event.get(
+                "source_topic"
+            ),
+
         "task_type":
             event.get(
                 "task_type"
@@ -1054,6 +1167,11 @@ def compact_event(
         "status":
             event.get(
                 "status"
+            ),
+
+        "payload":
+            event.get(
+                "payload"
             ),
     }
 
@@ -1228,6 +1346,61 @@ def find_lifecycle_for_event(
 
     return None
 
+
+def is_failure_event(event):
+    if event.get("event_type") != "NAVIGATION_FINISHED":
+        return False
+
+    status = str(event.get("status") or "").strip().casefold()
+    return status in {"6", "failed", "failure", "aborted"}
+
+
+def build_failure_contexts(events):
+    contexts = []
+
+    try:
+        from .build_evidence_packet import build_packet
+    except ImportError:
+        try:
+            from build_evidence_packet import build_packet
+        except ImportError:
+            return contexts
+
+    for event in events[-20:]:
+        if not is_failure_event(event):
+            continue
+
+        event_time_ns = event.get("event_time_ns")
+        session_id = event.get("session_id")
+        if event_time_ns is None or not session_id:
+            continue
+
+        window_ns = 30_000_000_000
+        try:
+            packet = build_packet(
+                session_id,
+                max(0, int(event_time_ns) - window_ns),
+                int(event_time_ns) + window_ns,
+            )
+        except Exception as exc:
+            contexts.append({
+                "event": compact_event(event),
+                "evidence_error": str(exc),
+            })
+            continue
+
+        contexts.append({
+            "event": compact_event(event),
+            "evidence_window_s": 30,
+            "wheel_odometry": packet.get("wheel_odometry"),
+            "velocity_commands": packet.get("velocity_commands"),
+            "lidar": packet.get("lidar"),
+            "localization": packet.get("localization"),
+            "system_samples": packet.get("system_samples"),
+        })
+
+    return contexts
+
 def execute_plan(
     events,
     plan,
@@ -1263,6 +1436,9 @@ def execute_plan(
             len(
                 matched
             ),
+
+        "time_range":
+            plan.get("time_range"),
     }
 
     # ========================================================
@@ -1294,6 +1470,8 @@ def execute_plan(
             for event
             in matched[-20:]
         ]
+
+        result["failure_contexts"] = build_failure_contexts(matched)
 
         return result
 
@@ -1352,6 +1530,8 @@ def execute_plan(
                     ),
             )
         )
+
+        result["failure_contexts"] = build_failure_contexts(matched)
 
         return result
 
@@ -1414,6 +1594,8 @@ def execute_plan(
                     )
                 )
 
+            result["failure_contexts"] = build_failure_contexts([latest])
+
         return result
 
 
@@ -1446,6 +1628,8 @@ def execute_plan(
         for event
         in selected_events
     ]
+
+    result["failure_contexts"] = build_failure_contexts(selected_events)
 
 
     related_lifecycles = []
@@ -1519,6 +1703,10 @@ def plan_and_query_events(
     plan = call_planner(
         question
     )
+
+    inferred_time_range = infer_time_range(question)
+    if any(value is not None for value in inferred_time_range.values()):
+        plan["time_range"] = inferred_time_range
 
     if not plan.get(
         "use_structured_events"

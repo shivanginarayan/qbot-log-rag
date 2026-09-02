@@ -1615,6 +1615,16 @@ GROUNDING RULES:
     structured query over recorded task_events across
     session databases.
 
+43a. If structured_event_query.result.time_range contains
+     a range, report that the count applies only to that
+     recorded range. Do not describe an all-history count
+     as a recent-period count.
+
+43b. failure_contexts contain sensor and runtime summaries
+     from a limited window around each recorded failure.
+     Use them to report supporting evidence, but do not
+     turn temporal correlation into a proven root cause.
+
 44. When structured_event_query.plan.operation is "count",
     use structured_event_query.result.count as the exact
     number of matching recorded events.
@@ -2823,6 +2833,11 @@ def main():
                     "matched_count":
                         result.get(
                             "matched_count"
+                        ),
+
+                    "time_range":
+                        result.get(
+                            "time_range"
                         ),
 
                     "count":
