@@ -5,11 +5,13 @@
   planning or control failure first gets the standard contextual costmap
   clears, followed by a clear/replan, wait/replan, spin/replan, and finally a
   collision-checked backup plus one last replan. Only after that final retry
-  fails is the active goal paused for operator help.
+  fails is the active goal paused for operator help. The outer recovery node
+  allows two recovery opportunities, so a goal can receive manual assistance
+  at most twice before Nav2 reports the goal as failed.
 -->
 <root main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
-    <RecoveryNode number_of_retries="1000000" name="NavigateRecovery">
+    <RecoveryNode number_of_retries="2" name="NavigateRecovery">
       <RecoveryNode number_of_retries="4" name="AutonomousRecoveryBeforeHelp">
         <PipelineSequence name="NavigateWithReplanning">
           <RateController hz="1.0">
