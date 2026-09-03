@@ -714,6 +714,8 @@ def sanitize_plan(
         "list",
         "latest",
         "group_count",
+        "failure_history",
+        "label_execution_history",
     }
 
     allowed_scope = {
@@ -950,6 +952,98 @@ def infer_time_range(question, now_ns=None):
     }
 
 
+def asks_failure_history(question):
+    q = str(question or "").casefold()
+    failure_words = ("fail", "failure", "failed")
+    history_words = (
+        "last",
+        "latest",
+        "previous",
+        "before",
+        "earlier",
+        "prior",
+    )
+    return (
+        any(word in q for word in failure_words)
+        and (
+            any(word in q for word in history_words)
+            or (
+                "why" in q
+                and ("navigat" in q or "localiz" in q)
+            )
+        )
+    )
+
+
+def failure_history_plan(question):
+    q = str(question or "").casefold()
+    task_types = (
+        ["localization"]
+        if "localiz" in q and "navigat" not in q
+        else ["navigate_to_location"]
+    )
+    scope = (
+        "current_session"
+        if "current session" in q or "this session" in q
+        else "all_sessions"
+    )
+    labels = [
+        label
+        for label in re.findall(r"\blabel[\w-]+\b", q)
+        if label != "label"
+    ]
+    return sanitize_plan({
+        "use_structured_events": True,
+        "reason": "Deterministic history query for recorded failures.",
+        "operation": "failure_history",
+        "scope": scope,
+        "filters": {
+            "event_types": ["NAVIGATION_FINISHED"],
+            "task_types": task_types,
+            "labels": labels,
+            "statuses": ["6"],
+        },
+        "time_range": infer_time_range(question),
+        "limit": 20,
+    })
+
+
+def asks_label_execution_history(question):
+    q = str(question or "").casefold()
+    return bool(
+        re.search(r"\blabel[\w-]+\b", q)
+        and any(
+            word in q
+            for word in ("told", "command", "request", "execution", "start")
+        )
+    )
+
+
+def label_execution_history_plan(question):
+    q = str(question or "").casefold()
+    labels = [
+        label
+        for label in re.findall(r"\blabel[\w-]+\b", q)
+        if label != "label"
+    ]
+    return sanitize_plan({
+        "use_structured_events": True,
+        "reason": "Deterministic lifecycle query for a named label.",
+        "operation": "label_execution_history",
+        "scope": "all_sessions",
+        "filters": {
+            "event_types": [
+                "NAVIGATION_COMMAND",
+                "NAVIGATION_STARTED",
+                "NAVIGATION_FINISHED",
+            ],
+            "task_types": ["navigate_to_location"],
+            "labels": labels,
+        },
+        "limit": 20,
+    })
+
+
 # ============================================================
 # FILTERING
 # ============================================================
@@ -977,6 +1071,26 @@ def matches_any_exact(
     return (
         normalized_value
         in normalized_requested
+    )
+
+
+def matches_failure_label(
+    value,
+    requested,
+):
+    if not requested:
+        return True
+
+    normalized_value = normalize_text(value) or ""
+    return any(
+        normalized_value == normalize_text(item)
+        or normalized_value.startswith(
+            (normalize_text(item) or "") + " "
+        )
+        or normalized_value.startswith(
+            (normalize_text(item) or "") + "("
+        )
+        for item in requested
     )
 
 
@@ -1082,14 +1196,17 @@ def filter_events(
         ):
             continue
 
-        if not matches_any_exact(
-            event.get(
-                "label_name"
-            ),
-            filters.get(
-                "labels",
-                [],
-            ),
+        label_matcher = (
+            matches_failure_label
+            if plan.get("operation") in {
+                "failure_history",
+                "label_execution_history",
+            }
+            else matches_any_exact
+        )
+        if not label_matcher(
+            event.get("label_name"),
+            filters.get("labels", []),
         ):
             continue
 
@@ -1451,6 +1568,68 @@ def execute_plan(
             plan.get("time_range"),
     }
 
+    if operation == "failure_history":
+        failures = [
+            compact_event(event)
+            for event in matched
+        ]
+        result["failure_count"] = len(failures)
+        result["history_scope"] = (
+            "current session"
+            if plan.get("scope") == "current_session"
+            else "all recorded sessions"
+        )
+        result["latest_failure"] = failures[-1] if failures else None
+        result["previous_failures"] = failures[:-1]
+        result["failure_contexts"] = build_failure_contexts(matched)
+        return result
+
+    if operation == "label_execution_history":
+        matched_ids = {
+            event.get("task_event_id")
+            for event in matched
+        }
+        lifecycles = build_lifecycles_by_session(events)
+        selected = []
+        requested_labels = plan.get("filters", {}).get("labels", [])
+
+        for lifecycle in lifecycles:
+            if lifecycle.get("task_type") != "navigate_to_location":
+                continue
+            if not matches_failure_label(
+                lifecycle.get("label_name"),
+                requested_labels,
+            ):
+                continue
+
+            candidates = [
+                lifecycle.get("command"),
+                lifecycle.get("execution_started"),
+                lifecycle.get("completion"),
+            ]
+            candidates.extend(
+                lifecycle.get("status_events", []) or []
+            )
+            if not any(
+                event and event.get("task_event_id") in matched_ids
+                for event in candidates
+            ):
+                continue
+            selected.append(compact_lifecycle(lifecycle))
+
+        selected.sort(
+            key=lambda item: int(
+                item.get("finish_ns")
+                or item.get("execution_start_ns")
+                or item.get("command_time_ns")
+                or 0
+            )
+        )
+        result["attempt_count"] = len(selected)
+        result["attempts"] = selected[-int(plan.get("limit", 20)):]
+        result["latest_attempt"] = selected[-1] if selected else None
+        return result
+
     # ========================================================
     # COUNT
     #
@@ -1710,9 +1889,14 @@ def plan_and_query_events(
     current_session_id=None,
     current_map=None,
 ):
-    plan = call_planner(
-        question
-    )
+    if asks_label_execution_history(question):
+        plan = label_execution_history_plan(question)
+    elif asks_failure_history(question):
+        plan = failure_history_plan(question)
+    else:
+        plan = call_planner(
+            question
+        )
 
     inferred_time_range = infer_time_range(question)
     if any(value is not None for value in inferred_time_range.values()):

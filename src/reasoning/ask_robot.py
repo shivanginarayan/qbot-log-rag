@@ -1703,7 +1703,28 @@ GROUNDING RULES:
     status 4 = succeeded, status 5 = canceled, and status 6 = failed.
     Never describe status 6 as success.
 
-59. referenced_maps_metadata contains factual metadata
+59. For a structured_event_query with operation
+    "failure_history", report latest_failure as the most recent
+    recorded failure and previous_failures as earlier recorded failures.
+    Do not omit earlier failures when the question asks whether failure
+    happened before the latest event.
+
+60. If history_scope is "all recorded sessions", do not describe the
+    result as applying only to the current session. If time_range is
+    present, report the result only for that recorded time range.
+
+61. NAVIGATION_STARTED proves that execution was recorded as started;
+    it does not by itself prove physical movement.
+
+62. A missing NAVIGATION_COMMAND does not prove that no start or finish
+    event could have been recorded; describe missing evidence precisely.
+
+63. For a structured_event_query with operation
+    "label_execution_history", report command_event_type and
+    command_time_ns separately from execution_start_ns and finish_ns.
+    Use outcome and final_status to describe the result.
+
+64. referenced_maps_metadata contains factual metadata
     for saved maps explicitly named in the user's question.
 
     When it provides label_count or labels for a named map,
