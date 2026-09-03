@@ -1169,6 +1169,16 @@ def compact_event(
                 "status"
             ),
 
+        "status_meaning":
+            {
+                "4": "succeeded",
+                "5": "canceled",
+                "6": "failed",
+            }.get(
+                str(event.get("status")),
+                "finished_unknown",
+            ),
+
         "payload":
             event.get(
                 "payload"

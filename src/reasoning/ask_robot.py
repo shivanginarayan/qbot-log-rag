@@ -1699,7 +1699,11 @@ GROUNDING RULES:
     not root cause. STARTED followed by FINISHED failed does
     not by itself explain why the task failed.
 
-58. referenced_maps_metadata contains factual metadata
+58. For navigation completion statuses, use this mapping:
+    status 4 = succeeded, status 5 = canceled, and status 6 = failed.
+    Never describe status 6 as success.
+
+59. referenced_maps_metadata contains factual metadata
     for saved maps explicitly named in the user's question.
 
     When it provides label_count or labels for a named map,
